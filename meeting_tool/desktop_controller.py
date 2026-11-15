@@ -19,7 +19,7 @@ from .audio import probe_audio
 from .engine import DIARIZATION_VERSION, WORKFLOW_VERSION, JobLock, MeetingJob, RunConfig, job_directory
 from .exports import atomic_json, export_transcript
 from .summarization import (DEFAULT_MODEL, PROMPT_VERSION, SummaryService,
-                            render_markdown, validate_content)
+                            render_markdown, speaker_catalog, validate_content)
 
 VERSION = "2.1"
 MEDIA_EXTENSIONS = {".wav", ".m4a", ".mp3", ".mp4", ".aac", ".ogg", ".opus", ".flac", ".wma", ".mkv", ".mov", ".amr"}
@@ -463,6 +463,7 @@ class MeetingController:
         state.setdefault("status", "complete" if report else "empty")
         state.setdefault("message", "总结已保存在本机。" if report else "生成整条录音的总结，并在最后列出待办事项。")
         state["report"] = report
+        state["needs_speaker_summary"] = bool(report and "speaker_summaries" not in report["content"])
         state["stale"] = bool(report and (report["input_fingerprint"] != snapshot["fingerprint"]
                                           or report.get("prompt_version") != PROMPT_VERSION
                                           or report.get("model") != DEFAULT_MODEL))
@@ -524,7 +525,8 @@ class MeetingController:
                         report = {**report, "schema_version": 1, "input_fingerprint": snapshot["fingerprint"],
                                   "coverage": snapshot["coverage"], "title": snapshot["title"],
                                   "duration_seconds": snapshot["duration_seconds"],
-                                  "content": validate_content(report.get("content"))}
+                                  "content": validate_content(report.get("content"), require_speakers=True,
+                                                              speakers=speaker_catalog(snapshot))}
                         rendered = render_markdown(report)
                         atomic_json(path / "AI总结.json", report)
                         try:

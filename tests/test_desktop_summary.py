@@ -17,7 +17,7 @@ from meeting_tool.desktop_controller import MeetingController
 from meeting_tool.desktop_server import DesktopServer
 from meeting_tool.engine import RunConfig, job_directory
 from meeting_tool.exports import atomic_json
-from meeting_tool.summarization import PROMPT_VERSION
+from meeting_tool.summarization import PROMPT_VERSION, render_markdown, speaker_catalog
 from test_desktop_controller import FakeJob, create_audio, prepare_complete, wait_idle
 
 
@@ -26,6 +26,7 @@ class FakeSummaryService:
     entered = threading.Event()
     release = None
     fail = False
+    omit_people = False
 
     def __init__(self, api_key, *, log=None, **kwargs):
         self.api_key = api_key
@@ -42,7 +43,7 @@ class FakeSummaryService:
             raise RuntimeError("模拟接口失败：" + self.api_key)
         # Deliberately ignore cancellation here: the controller must still
         # prevent this in-flight response from replacing an existing report.
-        return {
+        report = {
             "schema_version": 1,
             "prompt_version": PROMPT_VERSION,
             "model": "deepseek-flash",
@@ -52,6 +53,10 @@ class FakeSummaryService:
             "coverage": copy.deepcopy(snapshot["coverage"]),
             "content": {
                 "overview": "模拟会议总结，保留讨论与待确认事项。",
+                "speaker_summaries": [{"speaker": identifier, "speaker_name": name,
+                                       "summary": "讨论数字复核。", "points": ["建议复核数字。"],
+                                       "commitments": [], "evidence": "00:00:00—00:00:05"}
+                                      for identifier, name in speaker_catalog(snapshot).items()],
                 "topics": [{"title": "模拟议题", "summary": "整理各方讨论。"}],
                 "decisions": ["会议明确需要复核数字。"],
                 "open_questions": ["具体提交日期尚未明确。"],
@@ -60,6 +65,9 @@ class FakeSummaryService:
             },
             "usage": {"prompt_tokens": 12, "completion_tokens": 11, "total_tokens": 23},
         }
+        if type(self).omit_people:
+            report["content"]["speaker_summaries"] = []
+        return report
 
 
 class SummaryControllerTests(unittest.TestCase):
@@ -78,6 +86,7 @@ class SummaryControllerTests(unittest.TestCase):
         FakeSummaryService.entered = threading.Event()
         FakeSummaryService.release = None
         FakeSummaryService.fail = False
+        FakeSummaryService.omit_people = False
         self.opened = []
         self.controller = self.fresh_controller()
 
@@ -127,6 +136,37 @@ class SummaryControllerTests(unittest.TestCase):
         markdown = (self.directory / "AI总结.md").read_text(encoding="utf-8-sig")
         self.assertIn("待办事项", markdown)
         self.assertIn("复核数字", markdown[markdown.rfind("待办事项"):])
+        self.assertIn("## 按人物总结", markdown)
+        self.assertEqual({p["speaker"] for p in result["report"]["content"]["speaker_summaries"]}, {"S2", "unassigned"})
+
+    def test_missing_person_result_cannot_replace_an_existing_report(self):
+        self.generate()
+        before = {name: (self.directory / name).read_bytes() for name in ("AI总结.json", "AI总结.md")}
+        FakeSummaryService.omit_people = True
+        result = self.generate()
+        self.assertEqual(result["status"], "error")
+        self.assertIn("遗漏", result["message"])
+        for name, raw in before.items():
+            self.assertEqual((self.directory / name).read_bytes(), raw)
+
+    def test_legacy_report_remains_visible_and_exportable_without_automatic_generation(self):
+        result = self.generate()
+        legacy = result["report"]
+        legacy["content"].pop("speaker_summaries")
+        legacy["prompt_version"] = "meeting-summary-v1"
+        atomic_json(self.directory / "AI总结.json", legacy)
+        (self.directory / "AI总结.md").write_text(render_markdown(legacy), encoding="utf-8-sig")
+        before = (self.directory / "AI总结.json").read_bytes()
+        calls = len(FakeSummaryService.calls)
+        restored = self.fresh_controller()
+        summary = restored.state()["selected_job"]["ai_summary"]
+        self.assertIsNotNone(summary["report"])
+        self.assertTrue(summary["needs_speaker_summary"])
+        self.assertTrue(summary["stale"])
+        self.assertEqual(len(FakeSummaryService.calls), calls)
+        restored.dispatch("open_summary", {})
+        self.assertEqual((self.directory / "AI总结.json").read_bytes(), before)
+        self.assertIn("旧版总结尚未按人物整理", (self.directory / "AI总结.md").read_text(encoding="utf-8-sig"))
 
     def test_partial_requires_explicit_opt_in_and_reports_coverage(self):
         self.make_partial()

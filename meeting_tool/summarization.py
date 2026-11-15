@@ -20,7 +20,7 @@ from .audio import CancelledError
 from .exports import atomic_json, timestamp
 
 DEFAULT_MODEL = "deepseek-flash"
-PROMPT_VERSION = "meeting-summary-v1"
+PROMPT_VERSION = "meeting-summary-v2-speakers"
 CHAT_URL = "https://api.deepseek.com/chat/completions"
 CHUNK_CHARS = 12_000
 MERGE_CHARS = 40_000
@@ -45,10 +45,12 @@ def _text(value, maximum: int, *, empty: bool = False) -> str:
     return value
 
 
-def validate_content(content) -> dict:
+def validate_content(content, *, require_speakers: bool = False, speakers: dict | None = None) -> dict:
     """Validate both network results and historical/cached reports."""
     required = {"overview", "topics", "decisions", "open_questions", "todos"}
-    if not isinstance(content, dict) or set(content) != required:
+    if (not isinstance(content, dict) or not required <= set(content)
+            or set(content) - required - {"speaker_summaries"}
+            or require_speakers and "speaker_summaries" not in content):
         raise SummaryError("AI 总结的字段不完整，未覆盖原有总结。")
     output = {"overview": _text(content["overview"], 3500)}
     for field, maximum in (("topics", 60), ("decisions", 100), ("open_questions", 100), ("todos", 100)):
@@ -73,6 +75,39 @@ def validate_content(content) -> dict:
         else:
             normalized = [_text(value, 1500) for value in values]
         output[field] = normalized
+    if "speaker_summaries" in content:
+        values = content["speaker_summaries"]
+        if not isinstance(values, list) or len(values) > 21:
+            raise SummaryError("AI 人物总结的格式不完整，未覆盖原有总结。")
+        normalized, seen = [], set()
+        fields = {"speaker", "speaker_name", "summary", "points", "commitments", "evidence"}
+        for value in values:
+            if not isinstance(value, dict) or set(value) != fields:
+                raise SummaryError("AI 人物总结的字段不完整，未覆盖原有总结。")
+            identifier = _text(value["speaker"], 40)
+            name = _text(value["speaker_name"], 200)
+            if (identifier != "unassigned" and not re.fullmatch(r"S\d+", identifier)
+                    or identifier in seen):
+                raise SummaryError("AI 人物总结的人物编号无效或重复，未覆盖原有总结。")
+            seen.add(identifier)
+            lists = {}
+            for field in ("points", "commitments"):
+                items = value[field]
+                if not isinstance(items, list) or len(items) > 8:
+                    raise SummaryError("AI 人物总结的观点或承诺格式不完整，未覆盖原有总结。")
+                lists[field] = [_text(item, 800) for item in items]
+            if identifier == "unassigned" and (name != "归属待核" or lists["commitments"]):
+                raise SummaryError("归属待核的发言不能确定人物或承诺，未覆盖原有总结。")
+            normalized.append({"speaker": identifier, "speaker_name": name,
+                               "summary": _text(value["summary"], 1600), **lists,
+                               "evidence": _text(value["evidence"], 1200)})
+        if speakers is not None:
+            if seen != set(speakers):
+                raise SummaryError("AI 人物总结遗漏了发言人物或加入了未知人物，未覆盖原有总结；请重新生成。")
+            if any(value["speaker_name"] != speakers[value["speaker"]] for value in normalized):
+                raise SummaryError("AI 人物总结的人物姓名与当前标注不一致，未覆盖原有总结。")
+            normalized.sort(key=lambda value: list(speakers).index(value["speaker"]))
+        output["speaker_summaries"] = normalized
     if len(_compact(output)) > MAX_CONTENT_CHARS:
         raise SummaryError("AI 总结过长，未覆盖原有总结；请稍后重新生成。")
     return output
@@ -122,7 +157,7 @@ class DeepSeekChatClient:
             text = choice["message"]["content"]
             if not isinstance(text, str) or not text.strip():
                 raise ValueError
-            content = validate_content(json.loads(text))
+            content = validate_content(json.loads(text), require_speakers=True)
         except SummaryError:
             raise
         except (ValueError, UnicodeError, KeyError, TypeError, IndexError, AttributeError):
@@ -139,6 +174,11 @@ def _usage(value) -> dict:
 
 
 _SCHEMA = {"overview": "整段录音的中文概述", "topics": [{"title": "主要议题", "summary": "讨论内容及分歧"}],
+           "speaker_summaries": [{"speaker": "输入中的稳定人物编号，如S1；待核桶为unassigned",
+                                  "speaker_name": "输入人物清单中的称呼，原样保留",
+                                  "summary": "此人发言的简短概括", "points": ["主要观点或建议"],
+                                  "commitments": ["此人明确承诺的工作，没有则为空数组"],
+                                  "evidence": "对应发言的时间位置"}],
            "decisions": ["已经明确的结论；不要将建议、假设写成已确认决定"],
            "open_questions": ["尚待确认的问题"],
            "todos": [{"task": "明确提出的后续行动", "owner": "原文明确负责人，否则未明确",
@@ -151,13 +191,20 @@ _SYSTEM = """你是严谨的中文会议记录整理员。只根据用户提供�
 短期后续行动单独列入 todos，去重合并同一行动，保留明确负责人、时限以及材料中的时间位置或依据。
 没有明确待办时 todos 返回 []。列表也允许为空。不要输出 Markdown、HTML 或额外字段。
 overview 用一小段话说明整体；topics 概括主要议题；decisions 只列明确结论；open_questions 列未解决问题。
-内容应精炼，整体不超过 6500 个汉字；按下面示例的字段和类型输出完整 json：
+speaker_summaries 必须覆盖本次人物清单中全部编号，每个编号恰好一项；不同编号即使同名也不得合并。
+按编号整合同一人的发言；speaker_name 严格照抄人物清单，不自行猜测身份、姓名或职位。
+归属待核的发言只放在 unassigned/归属待核 项，不得分配给具体人物，其 commitments 必须为 []。
+每项概括此人说了什么，points 只写主要观点；commitments 只写此人明确承诺，讨论、建议不算承诺。
+只整理此人自己表达的内容；此人提到别人的行动，不等于此人自己的承诺。
+合并小结时必须保留每位人物，包括只有少量或只在末尾发言的人；evidence 保留原始时间位置。
+内容应精炼，整体不超过 3500 个汉字；每个人物用简短概括，观点和承诺各最多2条，没有则为空数组。
+按下面示例的字段和类型输出完整 json：
 """ + _compact(_SCHEMA)
 
 
-def _messages(material: str, snapshot: dict, *, merge: bool, final: bool) -> list[dict]:
+def _messages(material: str, snapshot: dict, *, merge: bool, final: bool, speakers: dict) -> list[dict]:
     context = {"录音标题": str(snapshot.get("title", "会议录音"))[:250],
-               "覆盖范围": snapshot.get("coverage", {}),
+               "覆盖范围": snapshot.get("coverage", {}), "本次人物清单": speakers,
                "处理步骤": "整合全部材料形成最终总结" if final else "提炼本部分，供之后合并",
                "材料类型": "按录音顺序排列的分段小结" if merge else "带音频片段时间的转写文字"}
     instruction = ("合并所有小结，逐份考虑后再去重，不能忽略后面的材料。保留待办依据；有冲突时列入尚待确认。"
@@ -177,8 +224,23 @@ def _clock(value) -> str:
     return timestamp(value)
 
 
-def _transcript_chunks(snapshot: dict) -> list[str]:
-    chunks, current, current_length = [], [], 0
+def _speaker_identity(row: dict) -> tuple[str, str]:
+    identifier = str(row.get("speaker") or "")
+    if row.get("uncertain") and not row.get("reviewed") or not re.fullmatch(r"S\d+", identifier):
+        return "unassigned", "归属待核"
+    name = str(row.get("speaker_name") or f"说话人 {identifier[1:]}")
+    return identifier, re.sub(r"\s+", " ", name).strip()[:200]
+
+
+def speaker_catalog(snapshot: dict) -> dict:
+    return {identifier: name for row in snapshot.get("segments", [])
+            if isinstance(row, dict) and row.get("state") == "done"
+            and isinstance(row.get("text"), str) and row["text"].strip()
+            for identifier, name in [_speaker_identity(row)]}
+
+
+def _transcript_parts(snapshot: dict) -> list[tuple[str, dict]]:
+    chunks, current, current_length, people = [], [], 0, {}
     for row in snapshot.get("segments", []):
         if not isinstance(row, dict) or row.get("state") != "done":
             continue
@@ -186,35 +248,39 @@ def _transcript_chunks(snapshot: dict) -> list[str]:
         if not isinstance(text, str) or not text.strip():
             continue
         text = text.strip()
-        who = str(row.get("speaker_name") or row.get("speaker") or "说话人未明确").replace("\n", " ")[:200]
-        header = f"[{_clock(row.get('start', 0))} → {_clock(row.get('end', 0))}] {who}"
-        if row.get("uncertain"):
-            header += "（归属待核）"
+        identifier, who = _speaker_identity(row)
+        header = f"[{_clock(row.get('start', 0))} → {_clock(row.get('end', 0))}] [人物ID={identifier}] {who}"
         budget = CHUNK_CHARS - len(header) - 40
         for offset in range(0, len(text), budget):
             piece = header + ("（同一发言的续段）" if offset else "") + "\n" + text[offset:offset + budget]
             if current and current_length + len(piece) + 2 > CHUNK_CHARS:
-                chunks.append("\n\n".join(current))
-                current, current_length = [], 0
+                chunks.append(("\n\n".join(current), people))
+                current, current_length, people = [], 0, {}
             current.append(piece)
+            people[identifier] = who
             current_length += len(piece) + 2
     if current:
-        chunks.append("\n\n".join(current))
+        chunks.append(("\n\n".join(current), people))
     return chunks
 
 
-def _merge_groups(contents: list[dict]) -> list[str]:
-    groups, current = [], []
+def _transcript_chunks(snapshot: dict) -> list[str]:
+    return [material for material, _people in _transcript_parts(snapshot)]
+
+
+def _merge_parts(contents: list[dict]) -> list[tuple[str, dict]]:
+    groups, current, people = [], [], {}
     length = 0
     for content in contents:
         part = _compact(content)
         if current and length + len(part) + 2 > MERGE_CHARS:
-            groups.append("\n\n".join(current))
-            current, length = [], 0
+            groups.append(("\n\n".join(current), people))
+            current, length, people = [], 0, {}
         current.append(part)
+        people.update({value["speaker"]: value["speaker_name"] for value in content["speaker_summaries"]})
         length += len(part) + 2
     if current:
-        groups.append("\n\n".join(current))
+        groups.append(("\n\n".join(current), people))
     return groups
 
 
@@ -235,16 +301,16 @@ class SummaryService:
                  progress=None) -> dict:
         progress = progress or (lambda _stage, _current, _total, _message: None)
         self._check_cancel(cancel_event)
-        chunks = _transcript_chunks(snapshot)
+        chunks = _transcript_parts(snapshot)
         if not chunks:
             raise ValueError("没有可供总结的转写文字，请先完成转写。")
         cache_dir = Path(job_dir) / ".ai_summary_cache"
         totals = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
                   "request_count": 0, "cache_hits": 0}
 
-        def complete(material, *, merge, final):
+        def complete(material, speakers, *, merge, final):
             self._check_cancel(cancel_event)
-            messages = _messages(material, snapshot, merge=merge, final=final)
+            messages = _messages(material, snapshot, merge=merge, final=final, speakers=speakers)
             identity = {"prompt_version": PROMPT_VERSION, "model": self.model, "messages": messages}
             digest = hashlib.sha256(_compact(identity).encode("utf-8")).hexdigest()
             cache_path = cache_dir / (digest + ".json")
@@ -254,7 +320,7 @@ class SummaryService:
                     record = json.loads(cache_path.read_text(encoding="utf-8"))
                     if (record.get("input_hash") == digest and record.get("model") == self.model
                             and record.get("prompt_version") == PROMPT_VERSION):
-                        cached = validate_content(record.get("content"))
+                        cached = validate_content(record.get("content"), require_speakers=True, speakers=speakers)
             except (OSError, ValueError, TypeError, SummaryError, AttributeError):
                 pass
             if cached is not None:
@@ -270,7 +336,7 @@ class SummaryService:
                 raise SummaryError("AI 总结请求未成功；未自动重试，原有总结和成功小结缓存仍保留。") from None
             if not isinstance(result, dict):
                 raise SummaryError("AI 总结响应格式不完整，原有总结仍保留。")
-            content = validate_content(result.get("content"))
+            content = validate_content(result.get("content"), require_speakers=True, speakers=speakers)
             for key, value in _usage(result.get("usage")).items():
                 totals[key] += value
             totals["request_count"] += 1
@@ -286,27 +352,28 @@ class SummaryService:
 
         if len(chunks) == 1:
             progress("summary", 0, 1, "正在整理整条录音的总结与待办事项。")
-            content = complete(chunks[0], merge=False, final=True)
+            content = complete(*chunks[0], merge=False, final=True)
             progress("summary", 1, 1, "AI 总结已生成，正在保存。")
         else:
             contents = []
             for index, chunk in enumerate(chunks):
                 progress("summary_parts", index, len(chunks), f"正在整理长录音的第 {index + 1}/{len(chunks)} 部分。")
-                contents.append(complete(chunk, merge=False, final=False))
+                contents.append(complete(*chunk, merge=False, final=False))
             level = 1
             while len(contents) > 1:
-                groups = _merge_groups(contents)
+                groups = _merge_parts(contents)
                 if len(groups) >= len(contents):
                     raise SummaryError("AI 分段小结过长，无法安全合并；已保留成功缓存，未覆盖原有总结。")
                 merged = []
                 for index, group in enumerate(groups):
                     progress("summary_merge", index, len(groups), f"正在合并第 {level} 轮小结（{index + 1}/{len(groups)}）。")
-                    merged.append(complete(group, merge=True, final=len(groups) == 1))
+                    merged.append(complete(*group, merge=True, final=len(groups) == 1))
                 contents = merged
                 level += 1
             content = contents[0]
             progress("summary", 1, 1, "所有分段已合并，正在保存整条录音的总结。")
         self._check_cancel(cancel_event)
+        content = validate_content(content, require_speakers=True, speakers=speaker_catalog(snapshot))
         return {"schema_version": 1, "prompt_version": PROMPT_VERSION, "model": self.model,
                 "title": str(snapshot.get("title") or "会议录音")[:500],
                 "duration_seconds": snapshot.get("duration_seconds", 0),
@@ -332,7 +399,21 @@ def render_markdown(report: dict) -> str:
              f"生成时间：{_markdown_text(report.get('created_at', ''))}",
              f"覆盖范围：{scope}（已转写 {done}/{total} 段）", "",
              "根据转写初稿整理，人物归属、数字及重要结论请结合录音确认。", "",
-             "## 内容概览", "", _markdown_text(content["overview"]), "", "## 主要议题", ""]
+             "## 内容概览", "", _markdown_text(content["overview"]), "", "## 按人物总结", ""]
+    if "speaker_summaries" not in content:
+        lines.append("这份旧版总结尚未按人物整理；重新生成可补齐，原有总结仍保留。")
+    for person in content.get("speaker_summaries", []):
+        label = ("归属待核" if person["speaker"] == "unassigned" else
+                 f"{person['speaker_name']}（{person['speaker']}）")
+        lines.extend(["### " + _markdown_text(label), "", _markdown_text(person["summary"]), ""])
+        if person["speaker"] == "unassigned":
+            lines.extend(["这些发言的人物归属尚未确认，不据此认定个人观点或工作承诺。", ""])
+        if person["points"]:
+            lines.extend(["主要观点：", *["- " + _markdown_text(value) for value in person["points"]], ""])
+        if person["commitments"]:
+            lines.extend(["明确承诺：", *["- " + _markdown_text(value) for value in person["commitments"]], ""])
+        lines.extend(["录音依据：" + _markdown_text(person["evidence"]), ""])
+    lines.extend(["## 主要议题", ""])
     for topic in content["topics"]:
         lines.extend([f"- **{_markdown_text(topic['title'])}**：{_markdown_text(topic['summary'])}"])
     if not content["topics"]:

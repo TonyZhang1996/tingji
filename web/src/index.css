@@ -3382,6 +3382,74 @@ input[type=range] {
   margin: 0 0 4px;
 }
 
+.summary-speaker-list {
+  margin-top: 18px;
+}
+
+.summary-person {
+  border-top: 1px solid #e8ebef;
+  padding: 18px 0;
+  overflow-wrap: anywhere;
+}
+
+.summary-person:last-child {
+  padding-bottom: 0;
+}
+
+.summary-person>header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 12px;
+  margin-bottom: 8px;
+}
+
+.summary-person h4 {
+  color: #252a32;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.summary-person>header>span {
+  color: #626a76;
+  font-size: 13px;
+}
+
+.summary-person-detail {
+  margin-top: 12px;
+}
+
+.summary-person-detail h5 {
+  margin-bottom: 4px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #515b68;
+}
+
+.summary-person-detail .summary-list {
+  gap: 4px;
+}
+
+.summary-person .summary-evidence {
+  margin-top: 12px;
+  color: #626a76;
+  font-size: 13px;
+}
+
+.summary-person .summary-attribution-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-bottom: 8px;
+  font-size: 14px;
+  color: #896326;
+}
+
+.summary-attribution-note svg {
+  flex-shrink: 0;
+  margin-top: 5px;
+}
+
 .summary-list {
   list-style: none;
   padding: 0;
