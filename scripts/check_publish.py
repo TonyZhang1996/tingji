@@ -1,0 +1,139 @@
+"""Audit Git blobs using a strict, content-aware publication allowlist.
+
+Ignored recordings, settings and caches are never read. Findings report file
+names and categories, without printing matched credentials or private content.
+"""
+from __future__ import annotations
+
+import argparse
+from pathlib import Path, PurePosixPath
+import re
+import subprocess
+
+ROOT = Path(__file__).resolve().parents[1]
+ROOT_FILES = {
+    '.gitignore', '.gitattributes', 'README.md', 'README.en.md', 'app.py',
+    'desktop.py', 'requirements_desktop.txt', '启动工具.cmd', '启动工具.vbs',
+    '启动旧版界面.cmd', '启动旧版界面.vbs', '准备桌面环境.cmd',
+}
+WEB_FILES = {
+    'web/package.json', 'web/package-lock.json', 'web/index.html',
+    'web/vite.config.ts', 'web/tsconfig.json', 'web/components.json',
+    'web/COMPONENT-SOURCES.txt', 'web/SHADCN-LICENSE.txt', 'web/dist/index.html',
+}
+BRAND_FILES = {'assets/tingji.svg', 'assets/tingji.png', 'assets/tingji.ico'}
+FORBIDDEN_PARTS = {
+    '.runtime', '.venv', 'venv', 'node_modules', '__pycache__', 'cache', 'work',
+    '.ai_summary_cache', '转写结果', '人物试听片段',
+}
+FORBIDDEN_SUFFIXES = {
+    '.wav', '.mp3', '.m4a', '.aac', '.ogg', '.opus', '.flac', '.wma', '.amr',
+    '.mp4', '.mkv', '.mov', '.avi', '.webm', '.pem', '.key', '.p12', '.pfx',
+    '.zip', '.7z', '.rar', '.db', '.sqlite', '.pt', '.pth', '.onnx', '.safetensors',
+    '.pyc', '.log', '.tmp', '.tsbuildinfo',
+}
+PATTERNS = {
+    'API credential pattern': re.compile(r'(?<![\w-])(?:sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,})(?![\w-])'),
+    'private key': re.compile(r'-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----'),
+    'personal Windows user path': re.compile(r'(?i)[a-z]:[\\/]+Users[\\/]+(?!Public(?:[\\/]|$))[^\\/\s"\'<>]+'),
+    'phone number pattern': re.compile(r'(?<!\d)1[3-9]\d{9}(?!\d)'),
+    'credential embedded in URL': re.compile(r'https?://[^\s/<>"\']+:[^\s/@<>"\']+@'),
+}
+
+
+def git(*args, **kwargs):
+    return subprocess.run(['git', *args], cwd=ROOT, check=True, stdout=subprocess.PIPE, **kwargs).stdout
+
+
+def allowed(name: str) -> bool:
+    path = PurePosixPath(name)
+    if any(part.lower() in FORBIDDEN_PARTS for part in path.parts):
+        return False
+    if path.suffix.lower() in FORBIDDEN_SUFFIXES or path.name.lower() == 'settings.json' or path.name.startswith('.env'):
+        return False
+    if name in ROOT_FILES or name in WEB_FILES or name in BRAND_FILES or name == 'scripts/check_publish.py':
+        return True
+    if len(path.parts) == 2 and path.parts[0] == 'meeting_tool' and path.suffix == '.py':
+        return True
+    if len(path.parts) == 2 and path.parts[0] == 'tests' and path.name.startswith('test_') and path.suffix == '.py':
+        return True
+    if name.startswith('web/src/') and path.suffix in {'.ts', '.tsx', '.css'}:
+        return True
+    return bool(re.fullmatch(r'web/dist/assets/index-[A-Za-z0-9_-]+\.(?:js|css)', name))
+
+
+def entries(ref: str | None):
+    rows = git('ls-tree', '-r', '-z', '--full-tree', ref) if ref else git('ls-files', '--stage', '-z')
+    result = []
+    for row in rows.split(b'\0'):
+        if not row:
+            continue
+        meta, name = row.split(b'\t', 1)
+        mode, middle, last = meta.decode('ascii').split()
+        if ref:
+            sha = last
+        else:
+            sha = middle
+            if last != '0':
+                raise ValueError('Unmerged index entries cannot be published.')
+        result.append((name.decode('utf-8'), mode, sha))
+    return result
+
+
+def audit(ref: str | None) -> int:
+    files = entries(ref)
+    if not files:
+        print('No reviewed files in the Git index/commit; upload blocked.')
+        return 1
+    raw = git('cat-file', '--batch', input=('\n'.join(row[2] for row in files) + '\n').encode('ascii'))
+    offset, total_bytes, findings = 0, 0, []
+    for name, mode, _sha in files:
+        end = raw.index(b'\n', offset)
+        header = raw[offset:end].split()
+        if len(header) != 3 or header[1] != b'blob':
+            raise ValueError('A staged object is not a regular Git blob.')
+        size = int(header[2])
+        content = raw[end + 1:end + 1 + size]
+        offset = end + 1 + size + 1
+        total_bytes += size
+        if mode not in {'100644', '100755'} or not allowed(name):
+            findings.append((name, 'file is outside the reviewed source allowlist'))
+            continue
+        if size > 3 * 1024 * 1024:
+            findings.append((name, 'unexpectedly large file'))
+            continue
+        if name in {'assets/tingji.png', 'assets/tingji.ico'}:
+            expected = b'\x89PNG\r\n\x1a\n' if name.endswith('.png') else b'\x00\x00\x01\x00'
+            if not content.startswith(expected):
+                findings.append((name, 'unexpected brand image format'))
+            continue
+        try:
+            text = content.decode('utf-16') if content.startswith((b'\xff\xfe', b'\xfe\xff')) else content.decode('utf-8-sig')
+        except UnicodeError:
+            findings.append((name, 'unexpected binary or encoding'))
+            continue
+        for label, pattern in PATTERNS.items():
+            if pattern.search(text):
+                findings.append((name, label))
+    if findings:
+        for name, label in findings:
+            print(f'BLOCKED: {name}: {label}')
+        print('Upload blocked. No matching secret or private content was printed.')
+        return 1
+    print(f'PASS: {len(files)} reviewed files, {total_bytes} bytes; no forbidden paths, media, or credential patterns.')
+    return 0
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Check Git content before sharing this project.')
+    parser.add_argument('--ref', help='Audit a commit/ref instead of the current Git index.')
+    args = parser.parse_args()
+    try:
+        return audit(args.ref)
+    except (ValueError, OSError, subprocess.CalledProcessError):
+        print('Could not complete the Git privacy check; upload blocked.')
+        return 1
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

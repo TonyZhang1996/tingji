@@ -1,0 +1,12 @@
+* text=auto
+*.py text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.css text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.cmd text eol=crlf
+# Windows Script Host needs the UTF-16 BOM for these Chinese launchers.
+*.vbs -text
+*.png -text
+*.ico -text
