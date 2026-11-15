@@ -9,6 +9,8 @@ import math
 import os
 from pathlib import Path
 import re
+import shutil
+import stat
 import threading
 import time
 from typing import Callable
@@ -221,6 +223,96 @@ class MeetingController:
                             "name": Path(source_path).name, "duration_seconds": analysis.get("duration_seconds", 0)}
         self.settings["num_speakers"] = int(analysis.get("num_speakers_requested", fingerprint.get("num_speakers", self.settings["num_speakers"])))
         self.settings["output_root"] = str(path.parent)
+
+    @staticmethod
+    def _is_reparse(path: Path) -> bool:
+        info = path.lstat()
+        return (stat.S_ISLNK(info.st_mode)
+                or bool(getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT))
+
+    def _job_sources(self, path: Path) -> set[Path]:
+        analysis, checkpoint, transcript = self._metadata(path)
+        sources = set()
+        for document, section, field in (
+            (analysis, "fingerprint", "path"), (analysis, "source_info", "path"),
+            (checkpoint, "fingerprint", "path"), (checkpoint, "metadata", "audio_path"),
+            (transcript, "metadata", "audio_path"),
+        ):
+            data = document.get(section, {})
+            value = data.get(field) if isinstance(data, dict) else None
+            if isinstance(value, str) and value:
+                sources.add(Path(value).expanduser().resolve())
+        return sources
+
+    def delete_job(self, key: str):
+        """Delete only a registered task's generated directory, never imported audio."""
+        with self._lock:
+            self._ensure_idle()
+            path = self._jobs.get(key)
+            if path is None:
+                raise ValueError("该历史任务不存在，请刷新任务列表。")
+            root = Path(self.settings["output_root"]).absolute()
+            if path.parent != root:
+                raise ValueError("该任务不在当前结果目录中，请先打开该任务，再删除。")
+            # Validate absolute targets before any recursive deletion. Resolved
+            # aliases and every nested reparse point are deliberately rejected.
+            if (not root.is_dir() or self._is_reparse(root) or root.resolve() != root
+                    or not path.is_dir()
+                    or self._is_reparse(path) or path.resolve() != path):
+                raise ValueError("无法安全删除该任务：目录不在当前结果目录内，或含有目录链接。")
+            for current, directories, files in os.walk(path, followlinks=False):
+                if any(self._is_reparse(Path(current) / name) for name in directories + files):
+                    raise ValueError("任务目录含有文件或目录链接，已保留全部文件。")
+            sources = self._job_sources(path)
+            known_sources = set(sources)
+            for other in self._jobs.values():
+                if other != path and other.is_dir():
+                    known_sources.update(self._job_sources(other))
+            if self._source and self._source.get("path"):
+                known_sources.add(Path(self._source["path"]).expanduser().resolve())
+            if any(source.is_relative_to(path) for source in known_sources):
+                raise ValueError("任务目录内含有导入的原始录音，已保留全部文件，请先移出原始录音。")
+            try:
+                with JobLock(path):
+                    # Windows cannot remove the open lock file. Hold the lock
+                    # while removing results, then only unlink/rmdir afterwards;
+                    # never recursively delete files created after releasing it.
+                    for child in sorted(path.iterdir(), key=lambda child: (child.is_file(), child.name)):
+                        if child.name == ".task.lock":
+                            continue
+                        if child.is_dir():
+                            shutil.rmtree(child)
+                        else:
+                            child.unlink()
+                (path / ".task.lock").unlink()
+                path.rmdir()
+            except RuntimeError:
+                raise ValueError("该任务正在另一窗口中使用，请先停止该窗口的任务，再删除。") from None
+            except OSError:
+                raise ValueError("任务文件被占用或无法删除，请关闭相关文件后重试；尚未删除的文件仍保留。") from None
+            self._jobs.pop(key, None)
+            self._summary_cache.pop(key, None)
+            self._ai_summaries.pop(key, None)
+            self._media = {identifier: media for identifier, media in self._media.items()
+                           if not media.is_relative_to(path) and media not in sources}
+            with _JSON_CACHE_LOCK:
+                for cached_path in list(_JSON_CACHE):
+                    if Path(cached_path).is_relative_to(path):
+                        _JSON_CACHE.pop(cached_path, None)
+            self._last_scan = -float("inf")
+            self._last_scan_root = None
+            if self._selected == key:
+                self._selected = None
+                self._source = None
+                remaining = [(identifier, directory) for identifier, directory in self._jobs.items()
+                             if directory.parent == root and directory.is_dir()]
+                if remaining:
+                    identifier, _ = max(remaining, key=lambda item: item[1].stat().st_mtime_ns)
+                    self._select_job_unlocked(identifier)
+                self._task.update(stage="idle", current=0, total=0, cancel_requested=False,
+                                  message="历史任务已删除，原始录音已保留。")
+            self._log("已删除一条历史任务及其生成文件；原始录音已保留。")
+        return self.state()
 
     def select_audio(self, path: Path | str):
         source = Path(path).expanduser().resolve()
@@ -599,6 +691,10 @@ class MeetingController:
             with self._lock:
                 self._ensure_idle()
                 self._select_job_unlocked(str(payload.get("id", "")))
+        elif action == "delete_job":
+            if set(payload) != {"job_id"} or not isinstance(payload["job_id"], str):
+                raise ValueError("请选择要删除的历史任务。")
+            return self.delete_job(payload["job_id"])
         elif action in ("analyze", "transcribe"):
             if "retry_uncertain" in payload:
                 with self._lock:

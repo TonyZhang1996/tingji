@@ -281,13 +281,43 @@ input[type=range] {
   gap: 9px;
   text-align: left;
   width: 100%;
-  padding: 10px 11px;
+  padding: 10px 44px 10px 11px;
   border: 1px solid transparent;
   border-radius: 4px;
   background: none;
   color: #c2c9d4;
   position: relative;
   margin-bottom: 2px;
+}
+
+.history-row {
+  position: relative;
+}
+
+.history-delete {
+  position: absolute;
+  right: 5px;
+  top: 9px;
+  width: 32px;
+  height: 32px;
+  color: #a8b3c4;
+}
+
+.history-delete:hover:not(:disabled),
+.history-delete:focus-visible {
+  color: #ffd0ce;
+  background: #503539;
+}
+
+.delete-job-title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.delete-warning {
+  color: var(--muted-foreground);
+  font-size: 14px;
+  line-height: 1.6;
 }
 
 .history-item:hover {

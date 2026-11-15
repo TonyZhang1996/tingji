@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
+import subprocess
 import tempfile
 import threading
 import time
@@ -13,7 +15,7 @@ import wave
 from unittest.mock import patch
 
 from meeting_tool.desktop_controller import MeetingController
-from meeting_tool.engine import DIARIZATION_VERSION, RunConfig, job_directory, source_fingerprint
+from meeting_tool.engine import DIARIZATION_VERSION, JobLock, RunConfig, job_directory, source_fingerprint
 from meeting_tool.exports import atomic_json, export_transcript
 
 
@@ -224,6 +226,158 @@ class ControllerTests(unittest.TestCase):
             with self.assertRaises(Exception):
                 self.controller.dispatch("config", payload)
         self.assertEqual(self.settings.read_bytes(), original)
+
+    def test_delete_last_job_removes_results_and_caches_but_preserves_source(self):
+        directory = self.create_selected_complete()
+        original = self.audio.read_bytes()
+        job = self.controller.state()["selected_job"]
+        identifier = job["id"]
+        atomic_json(directory / "review_annotations.json", {"segments": {}})
+        atomic_json(directory / "ai_summary.json", {"demo": "summary"})
+        self.controller._ai_summaries[identifier] = {"status": "complete"}
+        media = list(self.controller._media)
+        state = self.controller.dispatch("delete_job", {"job_id": identifier})
+        self.assertFalse(directory.exists())
+        self.assertEqual(self.audio.read_bytes(), original)
+        self.assertEqual(state["jobs"], [])
+        self.assertIsNone(state["selected_job"])
+        self.assertIsNone(state["source"])
+        self.assertNotIn(identifier, self.controller._summary_cache)
+        self.assertNotIn(identifier, self.controller._ai_summaries)
+        self.assertFalse(set(media) & set(self.controller._media))
+        self.assertEqual(self.controller.state()["jobs"], [])
+        restored = MeetingController(self.root, settings_path=self.settings, job_factory=FakeJob)
+        self.assertEqual(restored.state()["jobs"], [])
+        # A recreated task at the same path cannot reuse the deleted JSON cache.
+        prepare_complete(RunConfig(self.audio, self.output, num_speakers=2))
+        entries = self.controller.state()["jobs"]
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["id"], identifier)
+
+    def test_delete_selected_job_opens_remaining_job(self):
+        directory = self.create_selected_complete()
+        identifier = self.controller.state()["selected_job"]["id"]
+        other = create_audio(self.root / "other.wav")
+        other_config = RunConfig(other, self.output, num_speakers=2)
+        prepare_complete(other_config)
+        self.controller.state()
+        state = self.controller.dispatch("delete_job", {"job_id": identifier})
+        self.assertFalse(directory.exists())
+        self.assertTrue(job_directory(other_config).is_dir())
+        self.assertEqual(len(state["jobs"]), 1)
+        self.assertEqual(state["selected_job"]["id"], state["jobs"][0]["id"])
+        self.assertEqual(Path(state["source"]["path"]), other)
+
+    def test_delete_nonselected_job_keeps_current_selection(self):
+        directory = self.create_selected_complete()
+        identifier = self.controller.state()["selected_job"]["id"]
+        other = create_audio(self.root / "other.wav")
+        other_config = RunConfig(other, self.output, num_speakers=2)
+        prepare_complete(other_config)
+        entries = self.controller.state()["jobs"]
+        other_id = next(row["id"] for row in entries if row["id"] != identifier)
+        state = self.controller.dispatch("delete_job", {"job_id": other_id})
+        self.assertTrue(directory.is_dir())
+        self.assertFalse(job_directory(other_config).exists())
+        self.assertTrue(other.is_file())
+        self.assertEqual(state["selected_job"]["id"], identifier)
+        self.assertEqual(Path(state["source"]["path"]), self.audio)
+
+    def test_delete_rejects_busy_task_and_other_process_lock(self):
+        directory = self.create_selected_complete()
+        identifier = self.controller.state()["selected_job"]["id"]
+        checkpoint = (directory / "checkpoint.json").read_bytes()
+        self.controller._task["running"] = True
+        try:
+            with self.assertRaisesRegex(ValueError, "仍在运行"):
+                self.controller.dispatch("delete_job", {"job_id": identifier})
+        finally:
+            self.controller._task["running"] = False
+        with JobLock(directory):
+            with self.assertRaisesRegex(ValueError, "另一窗口中使用"):
+                self.controller.dispatch("delete_job", {"job_id": identifier})
+        self.assertEqual((directory / "checkpoint.json").read_bytes(), checkpoint)
+        self.assertTrue(self.audio.is_file())
+
+    def test_delete_rejects_unknown_ids_payloads_and_previous_output_root(self):
+        directory = self.create_selected_complete()
+        identifier = self.controller.state()["selected_job"]["id"]
+        for payload in ({}, {"job_id": "../results"}, {"job_id": identifier, "path": str(directory)}, {"job_id": 1}):
+            with self.assertRaises(ValueError):
+                self.controller.dispatch("delete_job", payload)
+            self.assertTrue((directory / "analysis.json").is_file())
+        other_root = self.root / "other-results"
+        other_root.mkdir()
+        self.controller.dispatch("config", {"output_root": str(other_root)})
+        with self.assertRaisesRegex(ValueError, "先打开该任务"):
+            self.controller.dispatch("delete_job", {"job_id": identifier})
+        self.assertTrue(directory.is_dir())
+
+    def test_delete_protects_source_audio_from_all_supported_metadata(self):
+        directory = self.create_selected_complete()
+        identifier = self.controller.state()["selected_job"]["id"]
+        inside = create_audio(directory / "original.wav")
+        for filename, section, field in (
+            ("analysis.json", "fingerprint", "path"),
+            ("analysis.json", "source_info", "path"),
+            ("checkpoint.json", "metadata", "audio_path"),
+            ("完整转写.json", "metadata", "audio_path"),
+        ):
+            with self.subTest(filename=filename, section=section):
+                file = directory / filename
+                original = json.loads(file.read_text(encoding="utf-8"))
+                updated = json.loads(json.dumps(original))
+                updated.setdefault(section, {})[field] = str(inside)
+                atomic_json(file, updated)
+                with self.assertRaisesRegex(ValueError, "原始录音"):
+                    self.controller.dispatch("delete_job", {"job_id": identifier})
+                self.assertTrue(inside.is_file())
+                self.assertTrue((directory / "cache" / "recording_16k.wav").is_file())
+                atomic_json(file, original)
+
+    def test_delete_protects_audio_imported_by_another_task_or_current_source(self):
+        directory = self.create_selected_complete()
+        identifier = self.controller.state()["selected_job"]["id"]
+        inside = directory / "cache" / "recording_16k.wav"
+        other_config = RunConfig(inside, self.output, num_speakers=2)
+        prepare_complete(other_config)
+        self.controller.state()
+        with self.assertRaisesRegex(ValueError, "原始录音"):
+            self.controller.dispatch("delete_job", {"job_id": identifier})
+        self.assertTrue(inside.is_file())
+        self.controller._jobs = {identifier: directory}
+        self.controller._source = {"path": str(inside)}
+        with self.assertRaisesRegex(ValueError, "原始录音"):
+            self.controller.dispatch("delete_job", {"job_id": identifier})
+        self.assertTrue(inside.is_file())
+
+    def test_delete_rejects_nested_directory_links_before_removing_anything(self):
+        directory = self.create_selected_complete()
+        identifier = self.controller.state()["selected_job"]["id"]
+        outside = self.root / "outside"
+        outside.mkdir()
+        sentinel = outside / "keep.txt"
+        sentinel.write_text("keep", encoding="utf-8")
+        link = directory / "cache" / "linked"
+        if os.name == "nt":
+            subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(outside)], check=True, capture_output=True)
+        else:
+            link.symlink_to(outside, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, "目录链接"):
+            self.controller.dispatch("delete_job", {"job_id": identifier})
+        self.assertTrue((directory / "analysis.json").is_file())
+        self.assertTrue((directory / "cache" / "recording_16k.wav").is_file())
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
+
+    def test_delete_io_failure_reports_failure_and_preserves_registry(self):
+        directory = self.create_selected_complete()
+        identifier = self.controller.state()["selected_job"]["id"]
+        with patch("meeting_tool.desktop_controller.shutil.rmtree", side_effect=PermissionError):
+            with self.assertRaisesRegex(ValueError, "文件被占用"):
+                self.controller.dispatch("delete_job", {"job_id": identifier})
+        self.assertTrue((directory / "analysis.json").is_file())
+        self.assertIn(identifier, self.controller._jobs)
+        self.assertTrue(self.audio.is_file())
 
 
 if __name__ == "__main__":

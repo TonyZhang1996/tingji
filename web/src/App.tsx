@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { AudioLines, ArrowDownToLine, ArrowRight, Check, CheckCheck, CheckCircle2, ChevronDown, Clock3, Copy, FileAudio2, Folder, Headphones, ListFilter, Loader2, Menu, Pause, PencilLine, Play, Plus, Search, Settings2, ShieldCheck, SkipBack, SkipForward, SlidersHorizontal, Square, UsersRound, Volume2, X, Eye, EyeOff, AlertCircle, PanelRightClose, PanelRightOpen } from 'lucide-react'
+import { AudioLines, ArrowDownToLine, ArrowRight, Check, CheckCheck, CheckCircle2, ChevronDown, Clock3, Copy, FileAudio2, Folder, Headphones, ListFilter, Loader2, Menu, Pause, PencilLine, Play, Plus, Search, Settings2, ShieldCheck, SkipBack, SkipForward, SlidersHorizontal, Square, UsersRound, Volume2, X, Eye, EyeOff, AlertCircle, PanelRightClose, PanelRightOpen, Trash2 } from 'lucide-react'
 import { Toaster, toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -37,6 +37,7 @@ export default function App(){
  const [inspectorOpen,setInspectorOpen]=useState(()=>window.innerWidth>=1090)
  const [logsOpen,setLogsOpen]=useState(false)
  const [editing,setEditing]=useState<Segment|null>(null)
+ const [deleting,setDeleting]=useState<Job|null>(null)
  const [draftText,setDraftText]=useState('')
  const [draftSpeaker,setDraftSpeaker]=useState('S1')
  const [names,setNames]=useState<Record<string,string>>({})
@@ -47,6 +48,13 @@ export default function App(){
  const sampleRef=useRef<HTMLAudioElement|null>(null)
  const lastState=useRef('')
  const namesSync=useRef('')
+ const actionPending=useRef(false)
+ const stateRevision=useRef(0)
+ const deleteCancelRef=useRef<HTMLButtonElement>(null)
+ const deleteTriggerRef=useRef<HTMLButtonElement|null>(null)
+ const historyRef=useRef<HTMLElement>(null)
+ const newTaskRef=useRef<HTMLButtonElement>(null)
+ const deletedRef=useRef(false)
  const job=sourceView?null:state.selected_job
  const running=state.task.running
  const selectedTitle=job?.title || state.source?.name || '新建转写'
@@ -62,14 +70,22 @@ export default function App(){
   if(fingerprint!==lastState.current){lastState.current=fingerprint;setState(next)}
   setConnected(true);setConnectionError('')
  },[])
- useEffect(()=>{let alive=true;let active=false;async function poll(){if(active)return;active=true;try{const next=await api('state');if(alive)applyState(next)}catch(error){if(alive)setConnectionError((error as Error).message)}finally{active=false}}void poll();const timer=setInterval(poll,1200);return()=>{alive=false;clearInterval(timer)}},[applyState])
+ useEffect(()=>{let alive=true;let active=false;async function poll(){if(active||actionPending.current)return;active=true;const revision=stateRevision.current;try{const next=await api('state');if(alive&&revision===stateRevision.current)applyState(next)}catch(error){if(alive&&revision===stateRevision.current)setConnectionError((error as Error).message)}finally{active=false}}void poll();const timer=setInterval(poll,1200);return()=>{alive=false;clearInterval(timer)}},[applyState])
  useEffect(()=>{const token=JSON.stringify([job?.id,job?.speaker_names]);if(token!==namesSync.current){namesSync.current=token;setNames({...job?.speaker_names})}},[job?.id,job?.speaker_names])
  useEffect(()=>{setQuery('');setFilter('all');setEditorView('transcript');setPlayTime(0);sampleRef.current?.pause();setSamplePlaying('')},[job?.id,audioUrl])
- const action=useCallback(async(path:string,body:unknown={})=>{if(busy)return null;setBusy(path);try{const next=await api(path,body);applyState(next);return next}catch(error){toast.error((error as Error).message);return null}finally{setBusy('')}},[busy,applyState])
+ const action=useCallback(async(path:string,body:unknown={})=>{if(actionPending.current)return null;actionPending.current=true;stateRevision.current++;setBusy(path);try{const next=await api(path,body);applyState(next);return next}catch(error){toast.error((error as Error).message);return null}finally{actionPending.current=false;setBusy('')}},[applyState])
  async function chooseAudio(){const next=await action('choose_audio');if(next?.source){setSourceView(false);setSidebarOpen(false)}}
  async function analyze(){setSourceView(false);await action('analyze')}
  async function transcribe(){if(!apiKey.trim()){setStartAfterSettings(true);setSettingsOpen(true);return}setSourceView(false);await action('transcribe',{api_key:apiKey.trim(),retry_uncertain:state.settings.retry_uncertain})}
  async function selectJob(id:string){const next=await action('select_job',{id});if(next){setSourceView(false);setSidebarOpen(false)}}
+ async function deleteJob(){
+  if(!deleting||running||actionPending.current)return
+  const current=deleting.id===state.selected_job?.id
+  if(current){audioRef.current?.pause();audioRef.current?.removeAttribute('src');audioRef.current?.load();sampleRef.current?.pause();if(sampleRef.current){sampleRef.current.removeAttribute('src');sampleRef.current.load();sampleRef.current=null}setSamplePlaying('')}
+  const next=await action('delete_job',{job_id:deleting.id})
+  if(current&&audioRef.current){const url=next?(next.selected_job?.audio_url||next.source?.audio_url||''):audioUrl;if(url)audioRef.current.src=url;else audioRef.current.removeAttribute('src');audioRef.current.load()}
+  if(next){if(current){setSourceView(false);setEditing(null)}deletedRef.current=true;setDeleting(null);toast.success('任务已删除，原始录音已保留')}
+ }
  function playAt(time:number){sampleRef.current?.pause();setSamplePlaying('');const audio=audioRef.current;if(!audio)return;audio.currentTime=time;void audio.play().catch(()=>toast.error('音频暂时无法播放，请确认文件仍在原位置。'))}
  function playSample(speaker:string,url:string){audioRef.current?.pause();if(samplePlaying===speaker){sampleRef.current?.pause();setSamplePlaying('');return}sampleRef.current?.pause();const audio=new Audio(url);audio.volume=audioRef.current?.volume??.8;sampleRef.current=audio;audio.onended=()=>setSamplePlaying('');audio.onerror=()=>{setSamplePlaying('');toast.error('声音样例读取失败，请重新分析人物。')};void audio.play().then(()=>setSamplePlaying(speaker)).catch(()=>toast.error('无法播放声音样例'))}
  function openEdit(segment:Segment){setEditing(segment);setDraftText(segment.text);setDraftSpeaker(segment.speaker)}
@@ -84,10 +100,10 @@ export default function App(){
   {sidebarOpen&&<button className="mobile-backdrop" aria-label="收起任务导航" onClick={()=>setSidebarOpen(false)}/>}
   <aside className={cn('sidebar',sidebarOpen&&'is-open')}>
    <div className="brand"><div className="brand-symbol"><AudioLines size={23} strokeWidth={2.1}/></div><div><strong>听记</strong><span>会议转写工作台</span></div></div>
-   <Button className="new-task" onClick={()=>{setSourceView(true);setSidebarOpen(false);void chooseAudio()}} disabled={!!busy||running}><Plus size={17}/>新建转写</Button>
+   <Button ref={newTaskRef} className="new-task" onClick={()=>{setSourceView(true);setSidebarOpen(false);void chooseAudio()}} disabled={!!busy||running}><Plus size={17}/>新建转写</Button>
    <div className="sidebar-search"><Search size={14}/><input aria-label="搜索历史录音" placeholder="搜索录音任务" value={historyQuery} onChange={e=>setHistoryQuery(e.target.value)}/></div>
    <div className="sidebar-section-label"><span>录音任务</span><span>{state.jobs.length}</span></div>
-   <nav className="history-list" aria-label="录音任务列表">{history.length?history.map(item=><button key={item.id} className={cn('history-item',job?.id===item.id&&'is-active')} disabled={running||!!busy} onClick={()=>void selectJob(item.id)}><FileAudio2 className="history-icon" size={17}/><div><span className="history-title" title={item.title}>{item.title}</span><span className="history-meta">{clock(item.duration_seconds)}<i/> {statusName(item)}</span></div>{job?.id===item.id&&<span className="active-dot"/>}</button>):<div className="history-empty"><Folder size={24}/><span>{historyQuery?'没有找到相关任务':'你的录音会保存在这里'}</span><small>{historyQuery?'试试其他文件名':'选择文件，开始第一份转写'}</small></div>}</nav>
+   <nav ref={historyRef} className="history-list" aria-label="录音任务列表">{history.length?history.map(item=><div key={item.id} className="history-row"><button className={cn('history-item',job?.id===item.id&&'is-active')} aria-current={job?.id===item.id?'page':undefined} disabled={running||!!busy} onClick={()=>void selectJob(item.id)}><FileAudio2 className="history-icon" size={17}/><div><span className="history-title" title={item.title}>{item.title}</span><span className="history-meta">{clock(item.duration_seconds)}<i/> {statusName(item)}</span></div></button><IconButton className="history-delete" label={`删除「${item.title}」`} disabled={running||!!busy} onClick={event=>{deleteTriggerRef.current=event.currentTarget;deletedRef.current=false;setDeleting(item)}}><Trash2 size={15}/></IconButton></div>):<div className="history-empty"><Folder size={24}/><span>{historyQuery?'没有找到相关任务':'你的录音会保存在这里'}</span><small>{historyQuery?'试试其他文件名':'选择文件，开始第一份转写'}</small></div>}</nav>
    <div className="sidebar-bottom"><div className="local-note"><ShieldCheck size={15}/><span>任务与文字保存在本机</span><span className="local-dot"/></div><button className="sidebar-settings" onClick={()=>{setStartAfterSettings(false);setSettingsOpen(true)}}><Settings2 size={17}/><span>转写设置</span><ChevronDown size={14}/></button><div className="sidebar-version">DeepSeek 语音转写<span>v{state.version||'2.1'}</span></div></div>
   </aside>
   <main className="main-shell">
@@ -123,6 +139,7 @@ export default function App(){
    <AudioPlayer audioRef={audioRef} src={audioUrl} duration={duration} title={selectedTitle} onTime={setPlayTime}/>
   </main>
  </div>
+ <Dialog open={!!deleting} onOpenChange={open=>{if(!open&&!busy)setDeleting(null)}}><DialogContent showCloseButton={!busy} className="delete-dialog" onOpenAutoFocus={event=>{event.preventDefault();deleteCancelRef.current?.focus()}} onCloseAutoFocus={event=>{event.preventDefault();if(deletedRef.current){(historyRef.current?.querySelector<HTMLButtonElement>('.history-item:not(:disabled)')||newTaskRef.current)?.focus();deletedRef.current=false}else deleteTriggerRef.current?.focus()}}><DialogHeader><DialogTitle>删除这条录音任务？</DialogTitle><DialogDescription>将从历史列表中移除，并永久删除本机保存的转写文字、人物校对、AI 总结及音频缓存。原始录音文件会保留。</DialogDescription></DialogHeader><p className="delete-job-title">{deleting?.title}</p><p className="delete-warning">此操作无法撤销，删除后需重新分析和转写。</p><DialogFooter><Button ref={deleteCancelRef} variant="outline" disabled={!!busy} onClick={()=>setDeleting(null)}>取消</Button><Button variant="destructive" disabled={!!busy||running} onClick={()=>void deleteJob()}>{busy==='delete_job'?<Loader2 className="spin"/>:<Trash2 size={15}/>} {busy==='delete_job'?'正在删除…':'删除任务'}</Button></DialogFooter></DialogContent></Dialog>
  <SettingsDialog open={settingsOpen} onOpenChange={open=>{setSettingsOpen(open);if(!open)setStartAfterSettings(false)}} settings={state.settings} apiKey={apiKey} setApiKey={setApiKey} busy={!!busy||running} startAfter={startAfterSettings} chooseOutput={async()=>{const next=await action('choose_output');return next?.settings.output_root}} save={async(settings)=>{const next=await action('config',settings);if(next){setSettingsOpen(false);if(startAfterSettings){setStartAfterSettings(false);if(!apiKey.trim()){toast.error('请填写 DeepSeek API Key');return}await action('transcribe',{api_key:apiKey.trim(),retry_uncertain:settings.retry_uncertain})}else toast.success('转写设置已保存')}}}/>
  <Dialog open={!!editing} onOpenChange={open=>!open&&setEditing(null)}><DialogContent className="edit-dialog"><DialogHeader><DialogTitle>校对这一段发言</DialogTitle><DialogDescription>{editing&&`${clock(editing.start,true)} — ${clock(editing.end,true)}`}　修改会保存在本机，并同步到导出文件。</DialogDescription></DialogHeader><div className="edit-speaker-row"><label>说话人</label><Select value={draftSpeaker} onValueChange={setDraftSpeaker}><SelectTrigger><SelectValue/></SelectTrigger><SelectContent>{speakerIds.map(id=><SelectItem value={id} key={id}>{speakerLabel(id,job?.speaker_names)}</SelectItem>)}</SelectContent></Select><Button variant="outline" onClick={()=>editing&&playAt(editing.start)}><Play size={14}/>回听本段</Button></div><label htmlFor="transcript-edit" className="field-label">发言内容</label><Textarea id="transcript-edit" className="transcript-textarea" value={draftText} onChange={e=>setDraftText(e.target.value)}/><DialogFooter><Button variant="outline" onClick={()=>setEditing(null)}>取消</Button><Button disabled={!!busy} onClick={()=>void saveReview()}>{busy?<Loader2 className="spin"/>:<CheckCheck size={15}/>}保存并标记已校对</Button></DialogFooter></DialogContent></Dialog>
  <Dialog open={logsOpen} onOpenChange={setLogsOpen}><DialogContent className="logs-dialog"><DialogHeader><DialogTitle>处理记录</DialogTitle><DialogDescription>查看当前任务的分析、转写与恢复进度。</DialogDescription></DialogHeader><div className="log-list">{state.logs.length?state.logs.map((line,i)=><div key={i}><time>{line.time}</time><p>{line.message}</p></div>):<p className="no-logs">还没有处理记录。选择录音后开始分析。</p>}</div></DialogContent></Dialog>

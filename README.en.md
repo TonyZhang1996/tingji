@@ -32,6 +32,7 @@ Listen to a segment, correct its text or speaker assignment, then mark it as rev
 
 - **Long recordings:** automatic segmentation, immediate saving of successful segments and resumable processing. Continuing a task skips segments already completed.
 - **Speaker review:** consistent speaker IDs throughout a recording, voice samples, editable names and corrections to text or speaker assignments.
+- **History management:** delete a task from the sidebar after confirmation. Its local transcript, corrections, summary and cache are removed; the original recording is preserved. Deletion is disabled while processing.
 - **Playback and exports:** jump to a segment for review; export TXT, Markdown, JSON, CSV or a segment timeline.
 - **AI summaries:** process long transcripts in parts and merge them, ending with action items, owners, deadlines and recording references. Summarizing an incomplete transcript requires an explicit partial-coverage choice.
 

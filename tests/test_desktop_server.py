@@ -126,6 +126,28 @@ class ServerTests(unittest.TestCase):
         self.assertIn(code, (HTTPStatus.BAD_REQUEST, HTTPStatus.NOT_FOUND))
         self.assertIn("message", json.loads(body))
 
+    def test_delete_job_requires_authorized_request_and_removes_only_task_results(self):
+        identifier = self.controller.state()["selected_job"]["id"]
+        directory = self.controller._jobs[identifier]
+        media = self.media_path()
+        payload = {"job_id": identifier}
+        for kwargs in ({"token": False}, {"headers": {"Origin": "https://untrusted.example"}}):
+            code, _, _ = self.call("/api/delete_job", method="POST", payload=payload, **kwargs)
+            self.assertEqual(code, HTTPStatus.FORBIDDEN)
+            self.assertTrue((directory / "analysis.json").is_file())
+        code, _, body = self.call("/api/delete_job", method="POST", payload=payload)
+        self.assertEqual(code, HTTPStatus.OK)
+        state = json.loads(body)
+        self.assertEqual(state["jobs"], [])
+        self.assertIsNone(state["selected_job"])
+        self.assertIsNone(state["source"])
+        self.assertFalse(directory.exists())
+        self.assertTrue(self.audio.is_file())
+        code, _, _ = self.call(media)
+        self.assertEqual(code, HTTPStatus.NOT_FOUND)
+        code, _, _ = self.call("/api/delete_job", method="POST", payload=payload)
+        self.assertEqual(code, HTTPStatus.BAD_REQUEST)
+
 
 if __name__ == "__main__":
     unittest.main()
