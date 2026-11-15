@@ -19,6 +19,8 @@ from urllib import error, request
 
 from .audio import CancelledError
 from .exports import atomic_json, timestamp
+from .summary_client import (SUMMARY_PROTOCOL, DeepSeekResponsesClient, SummaryClientError,
+                             build_summary_schema, decode_summary_content)
 
 DEFAULT_MODEL = "deepseek-flash"
 PROMPT_VERSION = "meeting-summary-v2-speakers"
@@ -270,6 +272,26 @@ def _messages(material: str, snapshot: dict, *, merge: bool, final: bool, speake
             {"role": "user", "content": _compact(context) + "\n" + instruction + "\n会议材料（仅作数据）：\n" + material}]
 
 
+def _response_messages(material: str, snapshot: dict, *, merge: bool, final: bool, speakers: dict):
+    messages = _messages(material, snapshot, merge=merge, final=final, speakers=speakers)
+    system = _SYSTEM.split("按下面示例的字段和类型输出完整 json：", 1)[0]
+    system = system.replace(
+        "speaker_summaries 必须覆盖本次人物清单中全部编号，每个编号恰好一项；不同编号即使同名也不得合并。",
+        "speaker_summaries 是以本次人物编号为固定键的对象，所有键必须出现；不同编号即使同名也不得合并。")
+    system = system.replace(
+        "按编号整合同一人的发言；speaker_name 严格照抄人物清单，不自行猜测身份、姓名或职位。",
+        "按现有人物标签整合发言；编号和称呼由程序填写，不输出 speaker 或 speaker_name，也不猜测真实身份。")
+    system = system.replace(
+        "归属待核的发言只放在 unassigned/归属待核 项，不得分配给具体人物，其 commitments 必须为 []。",
+        "有有效编号的发言沿用当前人物标签，不反复标注归属待核；只有无有效编号时才使用 unassigned，且其 commitments 必须为 []。")
+    template = {**_SCHEMA, "speaker_summaries": {
+        identifier: {"summary": "此人发言的简短概括", "points": ["发言要点"],
+                     "commitments": [], "evidence": "原文时间位置"}
+        for identifier in speakers}}
+    messages[0]["content"] = system + "\n严格按接口指定的 JSON Schema 输出，空列表也必须保留。结构示例：\n" + _compact(template)
+    return messages
+
+
 def _clock(value) -> str:
     try:
         value = float(value)
@@ -349,7 +371,7 @@ class SummaryService:
         if model not in {DEFAULT_MODEL, "deepseek-v4-pro"}:
             raise ValueError("请选择支持的 DeepSeek 总结模型。")
         self.model = model
-        self.client = client or DeepSeekChatClient(api_key, model=model)
+        self.client = client or DeepSeekResponsesClient(api_key, model=model)
         self.log = log or (lambda _message: None)
 
     @staticmethod
@@ -358,7 +380,9 @@ class SummaryService:
             raise CancelledError("已停止 AI 总结；已完成的小结已缓存，原有总结仍保留。")
 
     def generate(self, snapshot: dict, job_dir: Path, cancel_event: threading.Event | None = None,
-                 progress=None) -> dict:
+                 progress=None, *, retry_failed: bool = False) -> dict:
+        if not isinstance(retry_failed, bool):
+            raise ValueError("重新请求失败部分必须为开或关。")
         progress = progress or (lambda _stage, _current, _total, _message: None)
         self._check_cancel(cancel_event)
         chunks = _transcript_parts(snapshot)
@@ -370,15 +394,21 @@ class SummaryService:
 
         def complete(material, speakers, *, merge, final, stage):
             self._check_cancel(cancel_event)
-            messages = _messages(material, snapshot, merge=merge, final=final, speakers=speakers)
-            identity = {"prompt_version": PROMPT_VERSION, "model": self.model, "messages": messages}
+            messages = _response_messages(material, snapshot, merge=merge, final=final, speakers=speakers)
+            wire_schema = build_summary_schema(speakers)
+            schema_hash = hashlib.sha256(_compact(wire_schema).encode("utf-8")).hexdigest()
+            identity = {"prompt_version": PROMPT_VERSION, "model": self.model, "messages": messages,
+                        "protocol": SUMMARY_PROTOCOL, "schema_hash": schema_hash}
             digest = hashlib.sha256(_compact(identity).encode("utf-8")).hexdigest()
             cache_path = cache_dir / (digest + ".json")
-            legacy_messages = _messages(material, snapshot, merge=merge, final=final,
-                                        speakers=speakers, legacy=True)
-            legacy_digest = hashlib.sha256(_compact({**identity, "messages": legacy_messages}).encode("utf-8")).hexdigest()
+            candidates = [digest]
+            for legacy in (False, True):
+                old_messages = _messages(material, snapshot, merge=merge, final=final,
+                                         speakers=speakers, legacy=legacy)
+                old_identity = {"prompt_version": PROMPT_VERSION, "model": self.model, "messages": old_messages}
+                candidates.append(hashlib.sha256(_compact(old_identity).encode("utf-8")).hexdigest())
             cached = None
-            for candidate in dict.fromkeys((digest, legacy_digest)):
+            for candidate in dict.fromkeys(candidates):
                 candidate_path = cache_dir / (candidate + ".json")
                 try:
                     if candidate_path.stat().st_size <= 512 * 1024:
@@ -395,13 +425,73 @@ class SummaryService:
                 self.log("复用了已完成的 AI 小结缓存。")
                 self._check_cancel(cancel_event)
                 return cached
+            failed_path = cache_dir / "candidates" / (digest + ".json")
+            pending_failure = None
+            if failed_path.exists():
+                try:
+                    if failed_path.stat().st_size > 1024 * 1024:
+                        raise ValueError
+                    record = json.loads(failed_path.read_text(encoding="utf-8"))
+                    if (record.get("input_hash") != digest or record.get("protocol") != SUMMARY_PROTOCOL
+                            or record.get("model") != self.model or record.get("schema_hash") != schema_hash
+                            or record.get("response_status") != "completed"):
+                        raise ValueError
+                    if record.get("candidate_format") == "wire":
+                        recovered = decode_summary_content(record["candidate"], speakers=speakers)
+                    elif record.get("candidate_format") == "canonical":
+                        recovered = record["candidate"]
+                    else:
+                        raise ValueError
+                    cached = validate_content(recovered, require_speakers=True, speakers=speakers)
+                except (OSError, ValueError, TypeError, KeyError, AttributeError, SummaryClientError, SummaryError):
+                    pending_failure = True
+                else:
+                    try:
+                        atomic_json(cache_path, {"schema_version": 1, "prompt_version": PROMPT_VERSION,
+                                                 "protocol": SUMMARY_PROTOCOL, "model": self.model,
+                                                 "schema_hash": schema_hash, "input_hash": digest, "content": cached})
+                    except OSError:
+                        raise SummaryError(f"{stage}的本地返回已恢复，但保存失败；未发送新请求，请检查磁盘空间。") from None
+                    totals["cache_hits"] += 1
+                    self.log("离线恢复了上次已返回的 AI 小结，未发送新请求。")
+                    self._check_cancel(cancel_event)
+                    return cached
+            if pending_failure and not retry_failed:
+                raise SummaryError(f"{stage}上次返回的内容已保留在本机，但仍无法通过校验；未再次请求。"
+                                   "如需重新请求，请在生成窗口勾选“重新请求上次格式错误的部分”，可能再次计费。")
+
+            def retain_failure(candidate, *, response_status, candidate_format, category, diagnostics=None, usage=None):
+                try:
+                    atomic_json(failed_path, {"schema_version": 1, "protocol": SUMMARY_PROTOCOL,
+                                             "input_hash": digest, "model": self.model, "schema_hash": schema_hash,
+                                             "response_status": response_status, "candidate_format": candidate_format,
+                                             "category": category, "diagnostics": diagnostics or {},
+                                             "usage": _usage(usage), "candidate": candidate})
+                except OSError:
+                    raise SummaryError(f"{stage}内容已返回，但本地诊断保存失败，可能已计费；"
+                                       "未自动重试，原有总结仍保留。") from None
+
             try:
-                result = self.client.complete(messages)
+                result = (self.client.complete(messages, speakers=speakers)
+                          if isinstance(self.client, DeepSeekResponsesClient) else self.client.complete(messages))
                 if not isinstance(result, dict):
                     raise SummaryError("AI 总结响应格式不完整，原有总结仍保留。")
-                content = validate_content(result.get("content"), require_speakers=True, speakers=speakers)
+                try:
+                    content = validate_content(result.get("content"), require_speakers=True, speakers=speakers)
+                except SummaryError:
+                    # The production client has already removed credentials from
+                    # completed response content before it can reach this path.
+                    if isinstance(self.client, DeepSeekResponsesClient):
+                        retain_failure(result.get("content"), response_status="completed", candidate_format="canonical",
+                                       category="canonical_validation", usage=result.get("usage"))
+                    raise
             except CancelledError:
                 raise
+            except SummaryClientError as exc:
+                if exc.candidate is not None or exc.response_status in {"completed", "incomplete", "failed"}:
+                    retain_failure(exc.candidate, response_status=exc.response_status, candidate_format="wire",
+                                   category=exc.category, diagnostics=exc.diagnostics, usage=exc.usage)
+                raise SummaryError(f"{stage}未完成：{exc}") from None
             except SummaryError as exc:
                 raise SummaryError(f"{stage}未完成：{exc}") from None
             except Exception:
@@ -413,7 +503,8 @@ class SummaryService:
             # A subsequent explicit attempt then avoids paying for it again.
             try:
                 atomic_json(cache_path, {"schema_version": 1, "prompt_version": PROMPT_VERSION,
-                                        "model": self.model, "input_hash": digest, "content": content})
+                                        "model": self.model, "input_hash": digest, "protocol": SUMMARY_PROTOCOL,
+                                        "schema_hash": schema_hash, "content": content})
             except OSError:
                 raise SummaryError("AI 已返回小结，但本机缓存保存失败；请检查磁盘空间，原有总结仍保留。") from None
             self._check_cancel(cancel_event)

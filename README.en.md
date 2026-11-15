@@ -36,6 +36,8 @@ Listen to a segment, correct its text or speaker assignment, then mark it as rev
 - **Playback and exports:** jump to a segment for review; export TXT, Markdown, JSON, CSV or a segment timeline.
 - **AI summaries:** include an overall summary plus each speaker's main points, explicit commitments and recording references. Long transcripts are processed in parts and merged using current speaker labels, including labels not yet manually reviewed. Only speech without a valid speaker ID is grouped separately. Action items, owners and deadlines stay at the end. Incomplete transcripts require an explicit partial-coverage choice; regenerate older reports to add speaker summaries.
 
+Summaries use schema-constrained output through DeepSeek Responses, with speaker IDs and names supplied by the application. Malformed completed responses stay on the local machine for offline revalidation. Requesting a failed part again requires an explicit checkbox and may incur another charge.
+
 ## Getting started
 
 You need Windows, Python 3.11, Microsoft Edge WebView2, and `ffmpeg` and `ffprobe` available on `PATH`. Alternatively, place the FFmpeg executables in the project's `bin` directory.

@@ -16,7 +16,7 @@ type SummaryPanelProps = {
   busy:boolean
   running:boolean
   task:AppState['task']
-  onGenerate:(allowPartial:boolean)=>Promise<boolean>
+  onGenerate:(allowPartial:boolean,retryFailed:boolean)=>Promise<boolean>
   onCancel:()=>void
   onOpen:()=>void
 }
@@ -52,6 +52,7 @@ function summaryText(title:string,report:SummaryReport) {
 export function SummaryPanel({job,apiKey,setApiKey,busy,running,task,onGenerate,onCancel,onOpen}:SummaryPanelProps) {
   const [dialogOpen,setDialogOpen]=useState(false)
   const [allowPartial,setAllowPartial]=useState(false)
+  const [retryFailed,setRetryFailed]=useState(false)
   const [showKey,setShowKey]=useState(false)
   const summary=job.ai_summary
   const report=summary?.report
@@ -68,8 +69,8 @@ export function SummaryPanel({job,apiKey,setApiKey,busy,running,task,onGenerate,
   const progressMessage=progress?.message||summary?.message||task.message||'正在整理录音内容…'
   const created=report?.created_at?new Date(report.created_at):null
   const createdLabel=created&&!Number.isNaN(created.getTime())?created.toLocaleString('zh-CN',{hour12:false}):''
-  useEffect(()=>{if(dialogOpen){setAllowPartial(false);setShowKey(false)}},[dialogOpen,job.id])
-  async function generate(){if(await onGenerate(!full&&allowPartial))setDialogOpen(false)}
+  useEffect(()=>{if(dialogOpen){setAllowPartial(false);setRetryFailed(false);setShowKey(false)}},[dialogOpen,job.id])
+  async function generate(){if(await onGenerate(!full&&allowPartial,retryFailed))setDialogOpen(false)}
   async function copy(){if(!report)return;try{await navigator.clipboard.writeText(summaryText(job.title,report));toast.success('总体、人物总结与待办事项已复制')}catch{toast.error('复制未完成，请打开 Markdown 文件。')}}
   return <div className="summary-workspace">
     <div className="summary-actions">
@@ -93,6 +94,6 @@ export function SummaryPanel({job,apiKey,setApiKey,busy,running,task,onGenerate,
         <section className="summary-section summary-todos"><div className="summary-section-heading"><h3><ClipboardList size={17}/>待办事项</h3><span>{report.content.todos.length} 项</span></div>{report.content.todos.length?<ol className="summary-todo-list">{report.content.todos.map((item,index)=><li key={index}><span className="summary-todo-number">{index+1}</span><div><h4>{item.task}</h4><dl><div><dt>负责人</dt><dd>{item.owner||'未明确'}</dd></div><div><dt>期限</dt><dd>{item.deadline||'未明确'}</dd></div></dl><p className="summary-evidence"><span>依据</span>{item.evidence||'未明确'}</p></div></li>)}</ol>:<div className="summary-no-todos"><Check size={16}/><p>录音中暂无明确待办事项。</p></div>}</section>
       </article>:!generating&&<div className="summary-empty"><h2>尚未生成总结</h2><p>整理总体内容和每个人的发言要点，末尾列出待办事项。</p>{hasText?<><Button onClick={()=>setDialogOpen(true)} disabled={busy||running}><FileText size={16}/>生成总结</Button>{!full&&<span className="summary-empty-hint"><AlertCircle size={13}/>已转写 {doneCount} / {segments.length} 段，完成后可生成整篇总结</span>}</>:<div className="summary-before-transcript">先完成文字转写，再生成总结。</div>}<div className="summary-empty-note"><ShieldCheck size={14}/><span>负责人和期限以录音中明确内容为准。</span></div></div>}
     </div>
-    <Dialog open={dialogOpen} onOpenChange={setDialogOpen}><DialogContent className="summary-dialog"><DialogHeader><DialogTitle>生成录音总结</DialogTitle><DialogDescription>整理总体内容、每个人的发言要点和明确承诺，并在最后列出待办事项。</DialogDescription></DialogHeader><div className="summary-dialog-content"><div className="summary-input-scope"><FileText size={19}/><div><strong>{job.title}</strong><span>{full?`已完成 ${doneCount} 个片段，将总结整条录音。`:`已转写 ${doneCount} / ${segments.length} 个片段。`}</span></div></div>{!full&&<div className="summary-partial-option"><p><AlertCircle size={15}/>录音尚未全部转写，建议完成后生成整篇总结。</p><label><Checkbox checked={allowPartial} onCheckedChange={value=>setAllowPartial(value===true)}/><span><strong>仅总结已转写部分</strong><small>未转写部分不会纳入，总结将明确标注覆盖范围。</small></span></label></div>}<label htmlFor="summary-api-key" className="field-label">DeepSeek API Key</label><div className="password-field"><Input id="summary-api-key" type={showKey?'text':'password'} autoComplete="off" spellCheck={false} placeholder="粘贴你的 DeepSeek API Key" value={apiKey} onChange={event=>setApiKey(event.target.value)} disabled={busy||running}/><button aria-label={showKey?'隐藏总结 API Key':'显示总结 API Key'} onClick={()=>setShowKey(!showKey)}>{showKey?<EyeOff size={16}/>:<Eye size={16}/>}</button></div><p className="field-hint">Key 仅在当前窗口内使用，不会保存到文件。</p><p className="summary-api-note">会将转写文字发送给 DeepSeek，按文字量另外计费。长录音会分批整理，成功的部分保留在本机，方便重试时复用。</p></div><DialogFooter><Button variant="outline" onClick={()=>setDialogOpen(false)}>取消</Button><Button disabled={busy||running||!hasText||!apiKey.trim()||!full&&!allowPartial} onClick={()=>void generate()}>{busy?<Loader2 size={15} className="spin"/>:<FileText size={15}/>}开始生成</Button></DialogFooter></DialogContent></Dialog>
+    <Dialog open={dialogOpen} onOpenChange={setDialogOpen}><DialogContent className="summary-dialog"><DialogHeader><DialogTitle>生成录音总结</DialogTitle><DialogDescription>整理总体内容、每个人的发言要点和明确承诺，并在最后列出待办事项。</DialogDescription></DialogHeader><div className="summary-dialog-content"><div className="summary-input-scope"><FileText size={19}/><div><strong>{job.title}</strong><span>{full?`已完成 ${doneCount} 个片段，将总结整条录音。`:`已转写 ${doneCount} / ${segments.length} 个片段。`}</span></div></div>{!full&&<div className="summary-partial-option"><p><AlertCircle size={15}/>录音尚未全部转写，建议完成后生成整篇总结。</p><label><Checkbox checked={allowPartial} onCheckedChange={value=>setAllowPartial(value===true)}/><span><strong>仅总结已转写部分</strong><small>未转写部分不会纳入，总结将明确标注覆盖范围。</small></span></label></div>}<label htmlFor="summary-api-key" className="field-label">DeepSeek API Key</label><div className="password-field"><Input id="summary-api-key" type={showKey?'text':'password'} autoComplete="off" spellCheck={false} placeholder="粘贴你的 DeepSeek API Key" value={apiKey} onChange={event=>setApiKey(event.target.value)} disabled={busy||running}/><button aria-label={showKey?'隐藏总结 API Key':'显示总结 API Key'} onClick={()=>setShowKey(!showKey)}>{showKey?<EyeOff size={16}/>:<Eye size={16}/>}</button></div><p className="field-hint">Key 仅在当前窗口内使用，不会保存到文件。</p><p className="summary-api-note">会将转写文字发送给 DeepSeek，按文字量另外计费。长录音会分批整理，成功的部分保留在本机，方便重试时复用。</p><label className="retry-checkbox"><Checkbox checked={retryFailed} disabled={busy||running} onCheckedChange={value=>setRetryFailed(value===true)}/><span><strong>重新请求上次格式错误的部分</strong><small>默认先检查本地已返回的内容，不再次请求仍不合格的部分。勾选后允许重新发送，可能再次计费。</small></span></label></div><DialogFooter><Button variant="outline" onClick={()=>setDialogOpen(false)}>取消</Button><Button disabled={busy||running||!hasText||!apiKey.trim()||!full&&!allowPartial} onClick={()=>void generate()}>{busy?<Loader2 size={15} className="spin"/>:<FileText size={15}/>}开始生成</Button></DialogFooter></DialogContent></Dialog>
   </div>
 }

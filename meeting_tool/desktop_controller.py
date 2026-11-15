@@ -481,11 +481,13 @@ class MeetingController:
         os.replace(temporary, target)
         return target
 
-    def summarize(self, api_key: str, allow_partial: bool = False):
+    def summarize(self, api_key: str, allow_partial: bool = False, *, retry_failed: bool = False):
         if not isinstance(api_key, str) or not api_key.strip() or len(api_key) > 512:
             raise ValueError("请填写有效的 DeepSeek API Key。")
         if not isinstance(allow_partial, bool):
             raise ValueError("仅总结已转写部分必须为开或关。")
+        if not isinstance(retry_failed, bool):
+            raise ValueError("重新请求格式错误部分必须为开或关。")
         with self._lock:
             self._ensure_idle()
             key = self._selected
@@ -521,7 +523,7 @@ class MeetingController:
                 try:
                     job_lock.__enter__()
                     service = self.summary_factory(secret, log=lambda message: self._log(safe(message)))
-                    report = service.generate(snapshot, path, cancel, progress)
+                    report = service.generate(snapshot, path, cancel, progress, retry_failed=retry_failed)
                     with self._lock:
                         if cancel.is_set():
                             raise RuntimeError("总结已停止。")
@@ -673,9 +675,10 @@ class MeetingController:
         if action in ("choose_audio", "choose_output"):
             self._pick("audio" if action == "choose_audio" else "output")
         elif action == "summarize":
-            if set(payload) - {"api_key", "allow_partial"}:
+            if set(payload) - {"api_key", "allow_partial", "retry_failed"}:
                 raise ValueError("总结请求含有不支持的字段。")
-            self.summarize(payload.get("api_key", ""), payload.get("allow_partial", False))
+            self.summarize(payload.get("api_key", ""), payload.get("allow_partial", False),
+                           retry_failed=payload.get("retry_failed", False))
         elif action == "cancel_summary":
             self.cancel_summary()
         elif action == "open_summary":

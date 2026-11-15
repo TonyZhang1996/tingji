@@ -320,9 +320,8 @@ class SummaryServiceTests(unittest.TestCase):
             self.assertEqual(report["usage"]["request_count"], 1)
             self.assertEqual(len(client.messages), 1)
             system = client.messages[0][0]["content"]
-            self.assertIn('"speaker":"S1"', system)
+            self.assertIn('"speaker_summaries":{"S1"', system)
             self.assertNotIn("输入中的稳定人物编号，如S1", system)
-            self.assertIn("每个编号输出唯一一项", system)
             self.assertEqual([person["speaker"] for person in report["content"]["speaker_summaries"]], ["S1"])
             for file, original in originals.items():
                 self.assertEqual(file.read_bytes(), original)
@@ -344,7 +343,7 @@ class SummaryHttpTests(unittest.TestCase):
         value["speaker_summaries"].append({**person, "speaker": "S1"})
         with tempfile.TemporaryDirectory() as folder:
             with mock.patch("meeting_tool.summarization.request.urlopen", return_value=FakeResponse(response_payload(value))) as send:
-                report = SummaryService("mock-key").generate(snapshot(), Path(folder))
+                report = SummaryService("mock-key", client=DeepSeekChatClient("mock-key")).generate(snapshot(), Path(folder))
             self.assertEqual(send.call_count, 1)
             self.assertEqual(report["usage"]["request_count"], 1)
             self.assertEqual([p["speaker"] for p in report["content"]["speaker_summaries"]], ["S1"])
@@ -359,7 +358,7 @@ class SummaryHttpTests(unittest.TestCase):
         source["segments"][0]["speaker"] = "unknown"
         with tempfile.TemporaryDirectory() as folder:
             with mock.patch("meeting_tool.summarization.request.urlopen", return_value=FakeResponse(response_payload(value))) as send:
-                report = SummaryService("mock-key").generate(source, Path(folder))
+                report = SummaryService("mock-key", client=DeepSeekChatClient("mock-key")).generate(source, Path(folder))
         self.assertEqual(send.call_count, 1)
         people = report["content"]["speaker_summaries"]
         self.assertEqual(len(people), 1)
@@ -382,7 +381,7 @@ class SummaryHttpTests(unittest.TestCase):
                     person["speaker"] = "private-person-sentinel"
                 with mock.patch("meeting_tool.summarization.request.urlopen", return_value=FakeResponse(response_payload(value))) as send:
                     with self.assertRaises(SummaryError) as caught:
-                        SummaryService("mock-key").generate(snapshot(), Path(folder))
+                        SummaryService("mock-key", client=DeepSeekChatClient("mock-key")).generate(snapshot(), Path(folder))
                 self.assertEqual(send.call_count, 1)
                 self.assertIn("整条录音总结", str(caught.exception))
                 self.assertIn("重复" if mode == "duplicate" else "格式无效", str(caught.exception))
@@ -400,7 +399,7 @@ class SummaryHttpTests(unittest.TestCase):
             responses = [FakeResponse(response_payload(item)) for item in (value, value, invalid)]
             with mock.patch("meeting_tool.summarization.request.urlopen", side_effect=responses) as send:
                 with self.assertRaises(SummaryError) as caught:
-                    SummaryService("mock-key").generate(source, Path(folder))
+                    SummaryService("mock-key", client=DeepSeekChatClient("mock-key")).generate(source, Path(folder))
             self.assertEqual(send.call_count, 3)
             self.assertIn("第 1 轮合并（1/1）", str(caught.exception))
             self.assertIn("格式无效", str(caught.exception))

@@ -23,6 +23,7 @@ from test_desktop_controller import FakeJob, create_audio, prepare_complete, wai
 
 class FakeSummaryService:
     calls = []
+    retry_flags = []
     entered = threading.Event()
     release = None
     fail = False
@@ -32,8 +33,9 @@ class FakeSummaryService:
         self.api_key = api_key
         self.log = log or (lambda _message: None)
 
-    def generate(self, snapshot, job_dir, cancel_event, progress):
+    def generate(self, snapshot, job_dir, cancel_event, progress, *, retry_failed=False):
         type(self).calls.append(copy.deepcopy(snapshot))
+        type(self).retry_flags.append(retry_failed)
         type(self).entered.set()
         progress("map", 1, 2, "模拟整理发言")
         if type(self).release:
@@ -83,6 +85,7 @@ class SummaryControllerTests(unittest.TestCase):
         prepare_complete(self.config)
         self.directory = job_directory(self.config)
         FakeSummaryService.calls = []
+        FakeSummaryService.retry_flags = []
         FakeSummaryService.entered = threading.Event()
         FakeSummaryService.release = None
         FakeSummaryService.fail = False
@@ -324,6 +327,9 @@ class SummaryControllerTests(unittest.TestCase):
         for payload in [
             {"api_key": []}, {"api_key": None}, {"api_key": "mock-only", "allow_partial": "false"},
             {"api_key": "mock-only", "allow_partial": 1}, {"api_key": ""},
+            {"api_key": "mock-only", "retry_failed": "false"},
+            {"api_key": "mock-only", "retry_failed": 1},
+            {"api_key": "mock-only", "retry_failed": None},
         ]:
             with self.subTest(payload=payload), self.assertRaises(ValueError):
                 self.controller.dispatch("summarize", payload)
@@ -333,6 +339,21 @@ class SummaryControllerTests(unittest.TestCase):
         self.generate()
         self.controller.dispatch("open_summary", {})
         self.assertEqual(self.opened, [self.directory / "AI总结.md"])
+
+    def test_failed_summary_retry_requires_explicit_opt_in_and_preserves_previous_report(self):
+        self.assertEqual(self.generate()["status"], "complete")
+        previous = {name: (self.directory / name).read_bytes() for name in ("AI总结.json", "AI总结.md")}
+        FakeSummaryService.fail = True
+        result = self.generate()
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(FakeSummaryService.retry_flags, [False, False])
+        for name, value in previous.items():
+            self.assertEqual((self.directory / name).read_bytes(), value)
+        FakeSummaryService.fail = False
+        self.assertEqual(self.generate(retry_failed=True)["status"], "complete")
+        self.assertEqual(self.generate()["status"], "complete")
+        self.assertEqual(FakeSummaryService.retry_flags, [False, False, True, False])
+        self.assertEqual(len(FakeSummaryService.calls), 4)
 
     def test_old_history_can_be_summarized_without_reanalysis(self):
         analysis_path = self.directory / "analysis.json"
@@ -352,24 +373,25 @@ class SummaryHttpTests(unittest.TestCase):
     fresh_controller = SummaryControllerTests.fresh_controller
     tearDown = SummaryControllerTests.tearDown
 
-    def test_summary_post_requires_token_and_rejects_non_boolean_partial(self):
+    def test_summary_post_requires_token_and_rejects_non_boolean_options(self):
         dist = self.root / "web" / "dist"
         dist.mkdir(parents=True)
         (dist / "index.html").write_text("<html><head></head></html>", encoding="utf-8")
         server = DesktopServer(self.controller, dist).start()
         try:
             base = server.url.rstrip("/")
-            payload = {"api_key": "mock-only", "allow_partial": "false"}
-            for token, expected in [(False, 403), (True, 400)]:
-                headers = {"Content-Type": "application/json", "Origin": base}
-                if token:
-                    headers["X-Meeting-Token"] = server.token
-                req = request.Request(base + "/api/summarize", data=json.dumps(payload).encode(),
-                                      headers=headers, method="POST")
-                with self.assertRaises(error.HTTPError) as caught:
-                    request.urlopen(req, timeout=2)
-                self.assertEqual(caught.exception.code, expected)
-                caught.exception.close()
+            for option in ("allow_partial", "retry_failed"):
+                payload = {"api_key": "mock-only", option: "false"}
+                for token, expected in [(False, 403), (True, 400)]:
+                    headers = {"Content-Type": "application/json", "Origin": base}
+                    if token:
+                        headers["X-Meeting-Token"] = server.token
+                    req = request.Request(base + "/api/summarize", data=json.dumps(payload).encode(),
+                                          headers=headers, method="POST")
+                    with self.assertRaises(error.HTTPError) as caught:
+                        request.urlopen(req, timeout=2)
+                    self.assertEqual(caught.exception.code, expected)
+                    caught.exception.close()
             self.assertEqual(FakeSummaryService.calls, [])
         finally:
             server.shutdown()
