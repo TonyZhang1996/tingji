@@ -8,7 +8,9 @@ from __future__ import annotations
 import argparse
 from pathlib import Path, PurePosixPath
 import re
+import struct
 import subprocess
+import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
 ROOT_FILES = {
@@ -22,6 +24,10 @@ WEB_FILES = {
     'web/COMPONENT-SOURCES.txt', 'web/SHADCN-LICENSE.txt', 'web/dist/index.html',
 }
 BRAND_FILES = {'assets/tingji.svg', 'assets/tingji.png', 'assets/tingji.ico'}
+SCREENSHOT_FILES = {
+    'docs/screenshots/transcript.png', 'docs/screenshots/summary.png',
+    'docs/screenshots/review.png',
+}
 FORBIDDEN_PARTS = {
     '.runtime', '.venv', 'venv', 'node_modules', '__pycache__', 'cache', 'work',
     '.ai_summary_cache', '转写结果', '人物试听片段',
@@ -51,7 +57,7 @@ def allowed(name: str) -> bool:
         return False
     if path.suffix.lower() in FORBIDDEN_SUFFIXES or path.name.lower() == 'settings.json' or path.name.startswith('.env'):
         return False
-    if name in ROOT_FILES or name in WEB_FILES or name in BRAND_FILES or name == 'scripts/check_publish.py':
+    if name in ROOT_FILES or name in WEB_FILES or name in BRAND_FILES or name in SCREENSHOT_FILES or name == 'scripts/check_publish.py':
         return True
     if len(path.parts) == 2 and path.parts[0] == 'meeting_tool' and path.suffix == '.py':
         return True
@@ -60,6 +66,42 @@ def allowed(name: str) -> bool:
     if name.startswith('web/src/') and path.suffix in {'.ts', '.tsx', '.css'}:
         return True
     return bool(re.fullmatch(r'web/dist/assets/index-[A-Za-z0-9_-]+\.(?:js|css)', name))
+
+
+def valid_screenshot(content: bytes) -> bool:
+    """Accept only bounded, metadata-free browser PNG captures for reviewed names.
+
+    Pixel contents still require human privacy review before publishing.
+    """
+    if not content.startswith(b'\x89PNG\r\n\x1a\n'):
+        return False
+    offset, kinds = 8, []
+    while offset < len(content):
+        if offset + 12 > len(content):
+            return False
+        length = struct.unpack('>I', content[offset:offset + 4])[0]
+        kind = content[offset + 4:offset + 8]
+        end = offset + 8 + length
+        if end + 4 > len(content) or kind not in {b'IHDR', b'IDAT', b'IEND'}:
+            return False
+        payload = content[offset + 8:end]
+        expected = struct.unpack('>I', content[end:end + 4])[0]
+        if zlib.crc32(kind + payload) & 0xffffffff != expected:
+            return False
+        if kind == b'IHDR':
+            if kinds or length != 13:
+                return False
+            width, height, depth, color, compression, filtering, interlace = struct.unpack('>IIBBBBB', payload)
+            if not (960 <= width <= 2560 and 600 <= height <= 1600 and depth == 8
+                    and color in {2, 6} and compression == filtering == interlace == 0):
+                return False
+        elif kind == b'IEND':
+            if length != 0 or end + 4 != len(content):
+                return False
+        kinds.append(kind)
+        offset = end + 4
+    return (len(kinds) >= 3 and kinds[0] == b'IHDR' and kinds[-1] == b'IEND'
+            and all(kind == b'IDAT' for kind in kinds[1:-1]))
 
 
 def entries(ref: str | None):
@@ -101,6 +143,10 @@ def audit(ref: str | None) -> int:
             continue
         if size > 3 * 1024 * 1024:
             findings.append((name, 'unexpectedly large file'))
+            continue
+        if name in SCREENSHOT_FILES:
+            if not valid_screenshot(content):
+                findings.append((name, 'screenshot format, dimensions or metadata not approved'))
             continue
         if name in {'assets/tingji.png', 'assets/tingji.ico'}:
             expected = b'\x89PNG\r\n\x1a\n' if name.endswith('.png') else b'\x00\x00\x01\x00'

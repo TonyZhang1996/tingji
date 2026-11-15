@@ -30,6 +30,15 @@
 !/assets/tingji.png
 !/assets/tingji.ico
 
+# Only the reviewed, fictional-data documentation screenshots may be shared.
+!/docs/
+/docs/*
+!/docs/screenshots/
+/docs/screenshots/*
+!/docs/screenshots/transcript.png
+!/docs/screenshots/summary.png
+!/docs/screenshots/review.png
+
 !/web/
 /web/*
 !/web/package.json

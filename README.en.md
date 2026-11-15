@@ -6,6 +6,28 @@ A Windows desktop tool for meeting recordings: transcribe audio by speaker, list
 
 The interface uses React, shadcn/ui and pywebview. Speaker analysis runs locally; transcription and summaries use the DeepSeek API.
 
+## Interface preview
+
+These screenshots show the actual interface with fictional meeting content, roles and action items. They do not demonstrate transcription or speaker-recognition accuracy. The interface shown is in Chinese.
+
+### Speaker transcripts and playback
+
+Browse speech by speaker, listen to voice samples, edit speaker names and play individual segments.
+
+![Speaker transcripts and recording playback](docs/screenshots/transcript.png)
+
+### AI summary and action items
+
+The summary ends with action items, owners, deadlines and references to recording timestamps.
+
+![Action items with owners, deadlines and recording references](docs/screenshots/summary.png)
+
+### Segment review
+
+Listen to a segment, correct its text or speaker assignment, then mark it as reviewed.
+
+![Editing a segment and its speaker assignment](docs/screenshots/review.png)
+
 ## Features
 
 - **Long recordings:** automatic segmentation, immediate saving of successful segments and resumable processing. Continuing a task skips segments already completed.
