@@ -18,7 +18,7 @@ from typing import Callable
 from .audio import probe_audio
 from .engine import DIARIZATION_VERSION, WORKFLOW_VERSION, JobLock, MeetingJob, RunConfig, job_directory
 from .exports import atomic_json, export_transcript
-from .summarization import (DEFAULT_MODEL, PROMPT_VERSION, SummaryService,
+from .summarization import (ATTRIBUTION_POLICY, DEFAULT_MODEL, PROMPT_VERSION, SummaryService,
                             render_markdown, speaker_catalog, validate_content)
 
 VERSION = "2.1"
@@ -464,9 +464,13 @@ class MeetingController:
         state.setdefault("message", "总结已保存在本机。" if report else "生成整条录音的总结，并在最后列出待办事项。")
         state["report"] = report
         state["needs_speaker_summary"] = bool(report and "speaker_summaries" not in report["content"])
+        people_changed = bool(report and "speaker_summaries" in report["content"]
+                              and {person["speaker"] for person in report["content"]["speaker_summaries"]}
+                              != set(speaker_catalog(snapshot)))
         state["stale"] = bool(report and (report["input_fingerprint"] != snapshot["fingerprint"]
                                           or report.get("prompt_version") != PROMPT_VERSION
-                                          or report.get("model") != DEFAULT_MODEL))
+                                          or report.get("model") != DEFAULT_MODEL or people_changed
+                                          or report.get("attribution_policy") != ATTRIBUTION_POLICY))
         return state
 
     @staticmethod
@@ -523,6 +527,7 @@ class MeetingController:
                             raise RuntimeError("总结已停止。")
                         # The saved snapshot is authoritative even for injected/test services.
                         report = {**report, "schema_version": 1, "input_fingerprint": snapshot["fingerprint"],
+                                  "attribution_policy": ATTRIBUTION_POLICY,
                                   "coverage": snapshot["coverage"], "title": snapshot["title"],
                                   "duration_seconds": snapshot["duration_seconds"],
                                   "content": validate_content(report.get("content"), require_speakers=True,

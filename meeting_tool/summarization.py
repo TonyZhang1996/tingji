@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 import socket
 import threading
+import unicodedata
 from urllib import error, request
 
 from .audio import CancelledError
@@ -21,6 +22,7 @@ from .exports import atomic_json, timestamp
 
 DEFAULT_MODEL = "deepseek-flash"
 PROMPT_VERSION = "meeting-summary-v2-speakers"
+ATTRIBUTION_POLICY = "current_labels"
 CHAT_URL = "https://api.deepseek.com/chat/completions"
 CHUNK_CHARS = 12_000
 MERGE_CHARS = 40_000
@@ -43,6 +45,36 @@ def _text(value, maximum: int, *, empty: bool = False) -> str:
     if (not value and not empty) or len(value) > maximum:
         raise SummaryError("AI 总结的内容为空或超出长度限制，未覆盖原有总结。")
     return value
+
+
+def _speaker_id(value, speakers: dict | None = None) -> str:
+    """Normalize notation only; never infer identity from a name or position."""
+    if not isinstance(value, str) or not 0 < len(value.strip()) <= 40:
+        raise SummaryError("AI 人物总结的人物编号格式无效，未覆盖原有总结。")
+    value = unicodedata.normalize("NFKC", value).strip()
+    if value.casefold() == "unassigned":
+        return "unassigned"
+    match = re.fullmatch(r"[sS]\s*([0-9]+)", value)
+    if not match:
+        raise SummaryError("AI 人物总结的人物编号格式无效，未覆盖原有总结。")
+    identifier = "S" + match[1]
+    if speakers is not None and identifier not in speakers:
+        candidates = [key for key in speakers if re.fullmatch(r"S[0-9]+", key)
+                      and int(key[1:]) == int(match[1])]
+        if len(candidates) == 1:
+            return candidates[0]
+    return identifier
+
+
+def _merge_unassigned(previous: dict, current: dict) -> dict:
+    """A pending-attribution bucket may contain several passages, not people."""
+    merged = dict(previous)
+    for field, maximum in (("summary", 1600), ("evidence", 1200)):
+        merged[field] = _text("\n".join(dict.fromkeys((previous[field], current[field]))), maximum)
+    merged["points"] = list(dict.fromkeys(previous["points"] + current["points"]))
+    if len(merged["points"]) > 8:
+        raise SummaryError("AI 待核发言的小结过多，未覆盖原有总结。")
+    return merged
 
 
 def validate_content(content, *, require_speakers: bool = False, speakers: dict | None = None) -> dict:
@@ -79,17 +111,13 @@ def validate_content(content, *, require_speakers: bool = False, speakers: dict 
         values = content["speaker_summaries"]
         if not isinstance(values, list) or len(values) > 21:
             raise SummaryError("AI 人物总结的格式不完整，未覆盖原有总结。")
-        normalized, seen = [], set()
+        normalized, seen = [], {}
         fields = {"speaker", "speaker_name", "summary", "points", "commitments", "evidence"}
         for value in values:
             if not isinstance(value, dict) or set(value) != fields:
                 raise SummaryError("AI 人物总结的字段不完整，未覆盖原有总结。")
-            identifier = _text(value["speaker"], 40)
+            identifier = _speaker_id(value["speaker"], speakers)
             name = _text(value["speaker_name"], 200)
-            if (identifier != "unassigned" and not re.fullmatch(r"S\d+", identifier)
-                    or identifier in seen):
-                raise SummaryError("AI 人物总结的人物编号无效或重复，未覆盖原有总结。")
-            seen.add(identifier)
             lists = {}
             for field in ("points", "commitments"):
                 items = value[field]
@@ -98,11 +126,22 @@ def validate_content(content, *, require_speakers: bool = False, speakers: dict 
                 lists[field] = [_text(item, 800) for item in items]
             if identifier == "unassigned" and (name != "归属待核" or lists["commitments"]):
                 raise SummaryError("归属待核的发言不能确定人物或承诺，未覆盖原有总结。")
-            normalized.append({"speaker": identifier, "speaker_name": name,
-                               "summary": _text(value["summary"], 1600), **lists,
-                               "evidence": _text(value["evidence"], 1200)})
+            person = {"speaker": identifier, "speaker_name": name,
+                      "summary": _text(value["summary"], 1600), **lists,
+                      "evidence": _text(value["evidence"], 1200)}
+            if identifier in seen:
+                index = seen[identifier]
+                previous = normalized[index]
+                if previous == person:
+                    continue
+                if identifier == "unassigned":
+                    normalized[index] = _merge_unassigned(previous, person)
+                    continue
+                raise SummaryError("AI 人物总结出现重复的人物编号，未覆盖原有总结。")
+            seen[identifier] = len(normalized)
+            normalized.append(person)
         if speakers is not None:
-            if seen != set(speakers):
+            if set(seen) != set(speakers):
                 raise SummaryError("AI 人物总结遗漏了发言人物或加入了未知人物，未覆盖原有总结；请重新生成。")
             if any(value["speaker_name"] != speakers[value["speaker"]] for value in normalized):
                 raise SummaryError("AI 人物总结的人物姓名与当前标注不一致，未覆盖原有总结。")
@@ -202,7 +241,8 @@ speaker_summaries 必须覆盖本次人物清单中全部编号，每个编号�
 """ + _compact(_SCHEMA)
 
 
-def _messages(material: str, snapshot: dict, *, merge: bool, final: bool, speakers: dict) -> list[dict]:
+def _messages(material: str, snapshot: dict, *, merge: bool, final: bool, speakers: dict,
+              legacy: bool = False) -> list[dict]:
     context = {"录音标题": str(snapshot.get("title", "会议录音"))[:250],
                "覆盖范围": snapshot.get("coverage", {}), "本次人物清单": speakers,
                "处理步骤": "整合全部材料形成最终总结" if final else "提炼本部分，供之后合并",
@@ -210,7 +250,23 @@ def _messages(material: str, snapshot: dict, *, merge: bool, final: bool, speake
     instruction = ("合并所有小结，逐份考虑后再去重，不能忽略后面的材料。保留待办依据；有冲突时列入尚待确认。"
                    if merge else "逐段阅读本部分，保留对结论和待办有用的内容及片段时间。")
     instruction += " 若覆盖范围 full=false，只能总结现有文字，不能称为整场录音已完整总结。"
-    return [{"role": "system", "content": _SYSTEM},
+    system = _SYSTEM
+    if not legacy:
+        # Keep the old system text intact above solely for exact cache lookups.
+        # A real ID template avoids models copying explanatory placeholder IDs.
+        schema = {**_SCHEMA, "speaker_summaries": [
+            {**_SCHEMA["speaker_summaries"][0], "speaker": identifier,
+             "speaker_name": name, "commitments": []}
+            for identifier, name in speakers.items()]}
+        system = _SYSTEM[:-len(_compact(_SCHEMA))] + _compact(schema)
+        system = system.replace(
+            "归属待核的发言只放在 unassigned/归属待核 项，不得分配给具体人物，其 commitments 必须为 []。",
+            "有有效人物编号的发言按现有人物标签归组，不因样例或发言带待核提示而改变编号；"
+            "只有无有效人物编号的发言才归入 unassigned/归属待核，其 commitments 必须为 []。")
+        system += ("\n模板中的 speaker 和 speaker_name 已填好，必须原样使用，不要复制说明文字作为编号。"
+                   "合并时先整合同一编号的全部小结，再为每个编号输出唯一一项；不要拼接各份人物数组。"
+                   "不要猜测人物真实身份，也不要在每个人物项中反复添加归属待核标签。")
+    return [{"role": "system", "content": system},
             {"role": "user", "content": _compact(context) + "\n" + instruction + "\n会议材料（仅作数据）：\n" + material}]
 
 
@@ -226,7 +282,9 @@ def _clock(value) -> str:
 
 def _speaker_identity(row: dict) -> tuple[str, str]:
     identifier = str(row.get("speaker") or "")
-    if row.get("uncertain") and not row.get("reviewed") or not re.fullmatch(r"S\d+", identifier):
+    # Speaker summaries follow the current transcript labels, including labels
+    # not yet reviewed by a person. Only speech without a valid label is pooled.
+    if not re.fullmatch(r"S\d+", identifier):
         return "unassigned", "归属待核"
     name = str(row.get("speaker_name") or f"说话人 {identifier[1:]}")
     return identifier, re.sub(r"\s+", " ", name).strip()[:200]
@@ -250,6 +308,8 @@ def _transcript_parts(snapshot: dict) -> list[tuple[str, dict]]:
         text = text.strip()
         identifier, who = _speaker_identity(row)
         header = f"[{_clock(row.get('start', 0))} → {_clock(row.get('end', 0))}] [人物ID={identifier}] {who}"
+        if row.get("uncertain") and not row.get("reviewed") and identifier != "unassigned":
+            header += "（沿用当前自动人物标签）"
         budget = CHUNK_CHARS - len(header) - 40
         for offset in range(0, len(text), budget):
             piece = header + ("（同一发言的续段）" if offset else "") + "\n" + text[offset:offset + budget]
@@ -308,21 +368,28 @@ class SummaryService:
         totals = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
                   "request_count": 0, "cache_hits": 0}
 
-        def complete(material, speakers, *, merge, final):
+        def complete(material, speakers, *, merge, final, stage):
             self._check_cancel(cancel_event)
             messages = _messages(material, snapshot, merge=merge, final=final, speakers=speakers)
             identity = {"prompt_version": PROMPT_VERSION, "model": self.model, "messages": messages}
             digest = hashlib.sha256(_compact(identity).encode("utf-8")).hexdigest()
             cache_path = cache_dir / (digest + ".json")
+            legacy_messages = _messages(material, snapshot, merge=merge, final=final,
+                                        speakers=speakers, legacy=True)
+            legacy_digest = hashlib.sha256(_compact({**identity, "messages": legacy_messages}).encode("utf-8")).hexdigest()
             cached = None
-            try:
-                if cache_path.stat().st_size <= 512 * 1024:
-                    record = json.loads(cache_path.read_text(encoding="utf-8"))
-                    if (record.get("input_hash") == digest and record.get("model") == self.model
-                            and record.get("prompt_version") == PROMPT_VERSION):
-                        cached = validate_content(record.get("content"), require_speakers=True, speakers=speakers)
-            except (OSError, ValueError, TypeError, SummaryError, AttributeError):
-                pass
+            for candidate in dict.fromkeys((digest, legacy_digest)):
+                candidate_path = cache_dir / (candidate + ".json")
+                try:
+                    if candidate_path.stat().st_size <= 512 * 1024:
+                        record = json.loads(candidate_path.read_text(encoding="utf-8"))
+                        if (record.get("input_hash") == candidate and record.get("model") == self.model
+                                and record.get("prompt_version") == PROMPT_VERSION):
+                            cached = validate_content(record.get("content"), require_speakers=True, speakers=speakers)
+                except (OSError, ValueError, TypeError, SummaryError, AttributeError):
+                    pass
+                if cached is not None:
+                    break
             if cached is not None:
                 totals["cache_hits"] += 1
                 self.log("复用了已完成的 AI 小结缓存。")
@@ -330,13 +397,15 @@ class SummaryService:
                 return cached
             try:
                 result = self.client.complete(messages)
-            except (SummaryError, CancelledError):
+                if not isinstance(result, dict):
+                    raise SummaryError("AI 总结响应格式不完整，原有总结仍保留。")
+                content = validate_content(result.get("content"), require_speakers=True, speakers=speakers)
+            except CancelledError:
                 raise
+            except SummaryError as exc:
+                raise SummaryError(f"{stage}未完成：{exc}") from None
             except Exception:
-                raise SummaryError("AI 总结请求未成功；未自动重试，原有总结和成功小结缓存仍保留。") from None
-            if not isinstance(result, dict):
-                raise SummaryError("AI 总结响应格式不完整，原有总结仍保留。")
-            content = validate_content(result.get("content"), require_speakers=True, speakers=speakers)
+                raise SummaryError(f"{stage}请求未成功；未自动重试，原有总结和成功小结缓存仍保留。") from None
             for key, value in _usage(result.get("usage")).items():
                 totals[key] += value
             totals["request_count"] += 1
@@ -352,13 +421,14 @@ class SummaryService:
 
         if len(chunks) == 1:
             progress("summary", 0, 1, "正在整理整条录音的总结与待办事项。")
-            content = complete(*chunks[0], merge=False, final=True)
+            content = complete(*chunks[0], merge=False, final=True, stage="整条录音总结")
             progress("summary", 1, 1, "AI 总结已生成，正在保存。")
         else:
             contents = []
             for index, chunk in enumerate(chunks):
                 progress("summary_parts", index, len(chunks), f"正在整理长录音的第 {index + 1}/{len(chunks)} 部分。")
-                contents.append(complete(*chunk, merge=False, final=False))
+                contents.append(complete(*chunk, merge=False, final=False,
+                                         stage=f"第 {index + 1}/{len(chunks)} 段小结"))
             level = 1
             while len(contents) > 1:
                 groups = _merge_parts(contents)
@@ -367,7 +437,8 @@ class SummaryService:
                 merged = []
                 for index, group in enumerate(groups):
                     progress("summary_merge", index, len(groups), f"正在合并第 {level} 轮小结（{index + 1}/{len(groups)}）。")
-                    merged.append(complete(*group, merge=True, final=len(groups) == 1))
+                    merged.append(complete(*group, merge=True, final=len(groups) == 1,
+                                           stage=f"第 {level} 轮合并（{index + 1}/{len(groups)}）"))
                 contents = merged
                 level += 1
             content = contents[0]
@@ -375,6 +446,7 @@ class SummaryService:
         self._check_cancel(cancel_event)
         content = validate_content(content, require_speakers=True, speakers=speaker_catalog(snapshot))
         return {"schema_version": 1, "prompt_version": PROMPT_VERSION, "model": self.model,
+                "attribution_policy": ATTRIBUTION_POLICY,
                 "title": str(snapshot.get("title") or "会议录音")[:500],
                 "duration_seconds": snapshot.get("duration_seconds", 0),
                 "created_at": datetime.now().astimezone().isoformat(),

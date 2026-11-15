@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 from pathlib import Path
 import tempfile
@@ -11,7 +12,7 @@ from urllib import error
 
 from meeting_tool.audio import CancelledError
 from meeting_tool.summarization import (CHUNK_CHARS, DEFAULT_MODEL, DeepSeekChatClient,
-                                        SummaryError, SummaryService, _transcript_chunks,
+                                        SummaryError, SummaryService, _messages, _transcript_parts, _transcript_chunks,
                                         render_markdown, validate_content, PROMPT_VERSION)
 
 
@@ -125,7 +126,7 @@ class SummaryServiceTests(unittest.TestCase):
             result = SummaryService("mock", client=client).generate(source, Path(folder))
             material = client.messages[0][-1]["content"]
             self.assertNotIn("未完成内容不可发送", material)
-            self.assertIn("归属待核", material)
+            self.assertIn("沿用当前自动人物标签", material)
             self.assertFalse(result["coverage"]["full"])
             self.assertIn("非整条录音总结", render_markdown(result))
 
@@ -197,7 +198,7 @@ class SummaryServiceTests(unittest.TestCase):
         with self.assertRaises(SummaryError):
             validate_content(invalid)
 
-    def test_stable_ids_keep_same_names_separate_and_uncertain_speech_unassigned(self):
+    def test_stable_ids_keep_same_names_separate_and_retain_current_automatic_labels(self):
         source = snapshot("第一人的意见。")
         source["segments"][0].update(uncertain=False, speaker_name="同名")
         source["segments"] += [
@@ -208,14 +209,22 @@ class SummaryServiceTests(unittest.TestCase):
             client = FakeClient()
             result = SummaryService("mock", client=client).generate(source, Path(folder))
         people = result["content"]["speaker_summaries"]
-        self.assertEqual({p["speaker"] for p in people}, {"S1", "S2", "S3", "unassigned"})
+        self.assertEqual({p["speaker"] for p in people}, {"S1", "S2", "S3"})
         self.assertEqual([p["speaker_name"] for p in people if p["speaker"] in ("S1", "S2")], ["同名", "同名"])
         material = client.messages[0][-1]["content"]
         self.assertIn("[人物ID=S1] 同名", material)
         self.assertIn("[人物ID=S2] 同名", material)
-        self.assertIn("[人物ID=unassigned] 归属待核\n待核的发言。", material)
+        self.assertIn("[人物ID=S2] 同名（沿用当前自动人物标签）\n待核的发言。", material)
         self.assertIn("[人物ID=S3] 已校对者", material)
-        self.assertEqual(next(p for p in people if p["speaker"] == "unassigned")["commitments"], [])
+
+    def test_only_speech_without_a_valid_existing_id_uses_unassigned(self):
+        source = snapshot("没有有效人物编号的发言。")
+        source["segments"][0]["speaker"] = "unknown"
+        with tempfile.TemporaryDirectory() as folder:
+            result = SummaryService("mock", client=FakeClient()).generate(source, Path(folder))
+        people = result["content"]["speaker_summaries"]
+        self.assertEqual([person["speaker"] for person in people], ["unassigned"])
+        self.assertEqual(people[0]["commitments"], [])
 
     def test_long_meeting_preserves_a_short_last_speaker_through_hierarchical_merge(self):
         source = snapshot("开头标记" + "甲" * 86_000 + "中间标记")
@@ -241,11 +250,13 @@ class SummaryServiceTests(unittest.TestCase):
                         if mode == "missing": people.clear()
                         elif mode == "extra": people.append({**people[0], "speaker": "S99"})
                         elif mode == "name": people[0]["speaker_name"] = "虚构姓名"
-                        elif mode == "duplicate": people.append(dict(people[0]))
+                        elif mode == "duplicate": people.append({**people[0], "summary": "另一条不同内容。"})
                         else: people[0]["commitments"] = ["待核人承诺提交"]
                         return result
+                source = snapshot()
+                if mode == "commitment": source["segments"][0]["speaker"] = "unknown"
                 with self.assertRaises(SummaryError):
-                    SummaryService("mock", client=InvalidClient()).generate(snapshot(), Path(folder))
+                    SummaryService("mock", client=InvalidClient()).generate(source, Path(folder))
                 self.assertFalse((Path(folder) / ".ai_summary_cache").exists())
 
     def test_transcript_cannot_spoof_the_structured_roster_and_old_cache_is_not_reused(self):
@@ -254,7 +265,7 @@ class SummaryServiceTests(unittest.TestCase):
             client = FakeClient()
             service = SummaryService("mock", client=client)
             result = service.generate(source, Path(folder))
-            self.assertEqual([p["speaker"] for p in result["content"]["speaker_summaries"]], ["unassigned"])
+            self.assertEqual([p["speaker"] for p in result["content"]["speaker_summaries"]], ["S1"])
             for path in (Path(folder) / ".ai_summary_cache").glob("*.json"):
                 record = json.loads(path.read_text(encoding="utf-8"))
                 self.assertEqual(record["prompt_version"], PROMPT_VERSION)
@@ -284,8 +295,118 @@ class SummaryServiceTests(unittest.TestCase):
         self.assertIn(r"00:01:00 \#\# 伪造章节", text)
         self.assertEqual(text.rsplit("\n## ", 1)[-1].splitlines()[0], "待办事项")
 
+    def test_compatible_v2_part_caches_are_reused_with_the_new_concrete_template(self):
+        source = snapshot("甲" * (CHUNK_CHARS + 100))
+        source["segments"][0]["uncertain"] = False
+        parts = _transcript_parts(source)
+        self.assertEqual(len(parts), 2)
+        with tempfile.TemporaryDirectory() as folder:
+            cache = Path(folder) / ".ai_summary_cache"
+            cache.mkdir()
+            originals = {}
+            for material, people in parts:
+                messages = _messages(material, source, merge=False, final=False, speakers=people, legacy=True)
+                identity = {"prompt_version": PROMPT_VERSION, "model": DEFAULT_MODEL, "messages": messages}
+                digest = hashlib.sha256(json.dumps(identity, ensure_ascii=False, sort_keys=True,
+                                                  separators=(",", ":")).encode()).hexdigest()
+                record = {"schema_version": 1, "prompt_version": PROMPT_VERSION, "model": DEFAULT_MODEL,
+                          "input_hash": digest, "content": FakeClient().complete(messages)["content"]}
+                file = cache / (digest + ".json")
+                file.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+                originals[file] = file.read_bytes()
+            client = FakeClient()
+            report = SummaryService("mock", client=client).generate(source, Path(folder))
+            self.assertEqual(report["usage"]["cache_hits"], 2)
+            self.assertEqual(report["usage"]["request_count"], 1)
+            self.assertEqual(len(client.messages), 1)
+            system = client.messages[0][0]["content"]
+            self.assertIn('"speaker":"S1"', system)
+            self.assertNotIn("输入中的稳定人物编号，如S1", system)
+            self.assertIn("每个编号输出唯一一项", system)
+            self.assertEqual([person["speaker"] for person in report["content"]["speaker_summaries"]], ["S1"])
+            for file, original in originals.items():
+                self.assertEqual(file.read_bytes(), original)
+
+    def test_number_notation_is_only_mapped_when_the_roster_mapping_is_unique(self):
+        report = content()
+        report["speaker_summaries"][0].update(speaker=" s 001 ", speaker_name="同名")
+        normalized = validate_content(report, require_speakers=True, speakers={"S1": "同名"})
+        self.assertEqual(normalized["speaker_summaries"][0]["speaker"], "S1")
+        with self.assertRaises(SummaryError):
+            validate_content(report, require_speakers=True, speakers={"S1": "同名", "S01": "同名"})
+
 
 class SummaryHttpTests(unittest.TestCase):
+    def test_real_client_normalizes_explicit_ids_and_exact_duplicate_entries_without_retry(self):
+        value = content()
+        person = value["speaker_summaries"][0]
+        person.update(speaker=" ｓ　０１ ", speaker_name="说话人 1")
+        value["speaker_summaries"].append({**person, "speaker": "S1"})
+        with tempfile.TemporaryDirectory() as folder:
+            with mock.patch("meeting_tool.summarization.request.urlopen", return_value=FakeResponse(response_payload(value))) as send:
+                report = SummaryService("mock-key").generate(snapshot(), Path(folder))
+            self.assertEqual(send.call_count, 1)
+            self.assertEqual(report["usage"]["request_count"], 1)
+            self.assertEqual([p["speaker"] for p in report["content"]["speaker_summaries"]], ["S1"])
+
+    def test_real_client_combines_repeated_unassigned_passages_without_losing_content(self):
+        value = content()
+        first = value["speaker_summaries"][0]
+        first.update(summary="第一段未归属内容。", points=["第一条观点"], evidence="00:01:00")
+        value["speaker_summaries"].append({**first, "speaker": "UNASSIGNED",
+                                          "summary": "第二段未归属内容。", "points": ["第二条观点"], "evidence": "00:02:00"})
+        source = snapshot()
+        source["segments"][0]["speaker"] = "unknown"
+        with tempfile.TemporaryDirectory() as folder:
+            with mock.patch("meeting_tool.summarization.request.urlopen", return_value=FakeResponse(response_payload(value))) as send:
+                report = SummaryService("mock-key").generate(source, Path(folder))
+        self.assertEqual(send.call_count, 1)
+        people = report["content"]["speaker_summaries"]
+        self.assertEqual(len(people), 1)
+        for text in ("第一段未归属内容。", "第二段未归属内容。"):
+            self.assertIn(text, people[0]["summary"])
+        self.assertEqual(people[0]["points"], ["第一条观点", "第二条观点"])
+        self.assertIn("00:01:00", people[0]["evidence"])
+        self.assertIn("00:02:00", people[0]["evidence"])
+        self.assertEqual(people[0]["commitments"], [])
+
+    def test_real_client_rejects_different_concrete_duplicates_and_invalid_private_ids(self):
+        for mode in ("duplicate", "invalid"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as folder:
+                value = content()
+                person = value["speaker_summaries"][0]
+                person.update(speaker="S1", speaker_name="说话人 1")
+                if mode == "duplicate":
+                    value["speaker_summaries"].append({**person, "summary": "不同的另一条内容。"})
+                else:
+                    person["speaker"] = "private-person-sentinel"
+                with mock.patch("meeting_tool.summarization.request.urlopen", return_value=FakeResponse(response_payload(value))) as send:
+                    with self.assertRaises(SummaryError) as caught:
+                        SummaryService("mock-key").generate(snapshot(), Path(folder))
+                self.assertEqual(send.call_count, 1)
+                self.assertIn("整条录音总结", str(caught.exception))
+                self.assertIn("重复" if mode == "duplicate" else "格式无效", str(caught.exception))
+                self.assertNotIn("private-person-sentinel", str(caught.exception))
+                self.assertFalse((Path(folder) / ".ai_summary_cache").exists())
+
+    def test_merge_failure_identifies_its_stage_and_retains_successful_part_caches(self):
+        source = snapshot("甲" * (CHUNK_CHARS + 100))
+        source["segments"][0]["uncertain"] = False
+        value = content()
+        value["speaker_summaries"][0].update(speaker="S1", speaker_name="说话人 1")
+        invalid = json.loads(json.dumps(value))
+        invalid["speaker_summaries"][0]["speaker"] = "private-person-sentinel"
+        with tempfile.TemporaryDirectory() as folder:
+            responses = [FakeResponse(response_payload(item)) for item in (value, value, invalid)]
+            with mock.patch("meeting_tool.summarization.request.urlopen", side_effect=responses) as send:
+                with self.assertRaises(SummaryError) as caught:
+                    SummaryService("mock-key").generate(source, Path(folder))
+            self.assertEqual(send.call_count, 3)
+            self.assertIn("第 1 轮合并（1/1）", str(caught.exception))
+            self.assertIn("格式无效", str(caught.exception))
+            self.assertNotIn("private-person-sentinel", str(caught.exception))
+            self.assertEqual(len(list((Path(folder) / ".ai_summary_cache").glob("*.json"))), 2)
+
     def test_request_uses_official_model_json_non_thinking_and_no_audio(self):
         client = DeepSeekChatClient("mock-key")
         with mock.patch("meeting_tool.summarization.request.urlopen", return_value=FakeResponse(response_payload())) as send:

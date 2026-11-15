@@ -137,7 +137,36 @@ class SummaryControllerTests(unittest.TestCase):
         self.assertIn("待办事项", markdown)
         self.assertIn("复核数字", markdown[markdown.rfind("待办事项"):])
         self.assertIn("## 按人物总结", markdown)
-        self.assertEqual({p["speaker"] for p in result["report"]["content"]["speaker_summaries"]}, {"S2", "unassigned"})
+        self.assertEqual({p["speaker"] for p in result["report"]["content"]["speaker_summaries"]}, {"S2"})
+
+    def test_unreviewed_labels_are_summarized_separately_and_old_pool_is_stale(self):
+        checkpoint_path = self.directory / "checkpoint.json"
+        checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+        for row in checkpoint["segments"]:
+            row["uncertain"] = True
+        checkpoint["segments"].append({**checkpoint["segments"][-1], "id": "no-label-fixture",
+                                        "speaker": "", "start": 4.7, "end": 4.9})
+        atomic_json(checkpoint_path, checkpoint)
+        before = checkpoint_path.read_bytes()
+        result = self.generate()
+        self.assertEqual(result["status"], "complete")
+        people = result["report"]["content"]["speaker_summaries"]
+        self.assertEqual({person["speaker"] for person in people}, {"S1", "S2", "unassigned"})
+        self.assertEqual(checkpoint_path.read_bytes(), before)
+        self.assertFalse(self.summary_state()["stale"])
+        report_path = self.directory / "AI总结.json"
+        old_report = json.loads(report_path.read_text(encoding="utf-8"))
+        self.assertEqual(old_report.pop("attribution_policy"), "current_labels")
+        atomic_json(report_path, old_report)
+        # An old mixed report can have the same IDs while pooling different
+        # utterances; an explicit policy marker catches that change as well.
+        self.assertTrue(self.summary_state()["stale"])
+        old_report["content"]["speaker_summaries"] = [
+            {**people[0], "speaker": "unassigned", "speaker_name": "归属待核", "commitments": []}]
+        atomic_json(report_path, old_report)
+        state = self.summary_state()
+        self.assertTrue(state["stale"])
+        self.assertIsNotNone(state["report"])
 
     def test_missing_person_result_cannot_replace_an_existing_report(self):
         self.generate()
