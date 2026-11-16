@@ -6,6 +6,7 @@ names and categories, without printing matched credentials or private content.
 from __future__ import annotations
 
 import argparse
+import hashlib
 from pathlib import Path, PurePosixPath
 import re
 import struct
@@ -33,15 +34,68 @@ BUILD_FILES = {
     'scripts/windows/prepare_vendor_manifest.py', 'scripts/windows/tingji.spec',
     'scripts/windows/tingji.iss',
 }
+ANDROID_WRAPPER = 'mobile/android/gradle/wrapper/gradle-wrapper.jar'
+ANDROID_WRAPPER_BYTES = 43583
+ANDROID_WRAPPER_SHA256 = '2db75c40782f5e8ba1fc278a5574bab070adccb2d21ca5a6e5ed840888448046'
+ANDROID_LICENSE_FILES = {
+    'mobile/android/app/src/main/assets/licenses/' + name for name in {
+        '3D-Speaker-LICENSE.txt', 'AndroidX-LICENSE.txt', 'CAMplusplus-model-card.txt',
+        'Eigen-3.4.0-MPL2.txt', 'Eigen-3.4.0-README.txt',
+        'frontend-components.json', 'frontend-licenses.txt',
+        'hclust-cpp-2026-02-25-LICENSE.txt', 'json-3.12.0-LICENSE.txt',
+        'kaldi-decoder-0.3.0-LICENSE.txt', 'kaldi-native-fbank-1.22.4-LICENSE.txt',
+        'kaldifst-1.8.0-LICENSE.txt', 'KissFFT-BSD-3-Clause.txt', 'KissFFT-COPYING.txt',
+        'KissFFT-Unlicense.txt', 'Kotlin-2.1.21-COPYRIGHT.txt', 'Kotlin-2.1.21-LICENSE.txt',
+        'license-sources.json', 'LLVM-runtime-LICENSE.txt',
+        'onnxruntime-1.28.2-LICENSE.txt', 'onnxruntime-1.28.2-ThirdPartyNotices.txt',
+        'OpenFst-1.8.5-LICENSE.txt', 'sherpa-onnx-2.0.1-LICENSE.txt',
+        'Silero-VAD-LICENSE.txt', 'simple-sentencepiece-0.7-LICENSE.txt',
+        'utf8proc-2.12.0-LICENSE.txt',
+    }
+}
+ANDROID_FILES = {
+    'mobile/README.md',
+    'mobile/vendor-manifest.json',
+    'mobile/scripts/prepare_android.py', 'mobile/scripts/build_android.py', 'mobile/scripts/audit_apk.py',
+    'mobile/android/settings.gradle.kts', 'mobile/android/build.gradle.kts',
+    'mobile/android/gradle.properties', 'mobile/android/gradlew', 'mobile/android/gradlew.bat',
+    'mobile/android/gradle/wrapper/gradle-wrapper.properties', ANDROID_WRAPPER,
+    'mobile/android/app/build.gradle.kts',
+    'mobile/android/app/src/main/AndroidManifest.xml',
+    'mobile/android/app/src/debug/AndroidManifest.xml',
+    'mobile/android/app/src/debug/res/xml/debug_network_security.xml',
+    'mobile/android/app/src/main/res/xml/file_paths.xml',
+    'mobile/android/app/src/main/res/xml/data_extraction_rules.xml',
+    'mobile/android/app/src/main/res/values/styles.xml',
+    'mobile/android/app/src/main/res/drawable/ic_notification.xml',
+    'mobile/android/app/src/main/res/mipmap/ic_launcher.xml',
+    'mobile/android/app/src/main/java/com/tingji/app/MainActivity.kt',
+    'mobile/android/app/src/main/java/com/tingji/app/MediaRegistry.kt',
+    'mobile/android/app/src/main/java/com/tingji/app/SherpaSpeakerAnalyzer.kt',
+    'mobile/android/app/src/main/java/com/tingji/app/TingjiApplication.kt',
+    'mobile/android/app/src/main/java/com/tingji/app/TingjiTaskService.kt',
+    'mobile/android/app/src/main/java/com/tingji/app/engine/AudioTools.kt',
+    'mobile/android/app/src/main/java/com/tingji/app/engine/DeepSeekClient.kt',
+    'mobile/android/app/src/main/java/com/tingji/app/engine/EngineFiles.kt',
+    'mobile/android/app/src/main/java/com/tingji/app/engine/MeetingEngine.kt',
+    'mobile/android/app/src/main/java/com/tingji/app/engine/MeetingSummary.kt',
+    'mobile/android/app/src/main/java/com/tingji/app/engine/SpeakerAnalyzer.kt',
+    'mobile/android/app/src/test/java/com/tingji/app/ByteRangeTest.kt',
+    'mobile/android/app/src/test/java/com/tingji/app/SphericalClustererTest.kt',
+    'mobile/android/app/src/test/java/com/tingji/app/engine/EnginePureTests.kt',
+    'mobile/android/app/src/androidTest/java/com/tingji/app/engine/MeetingEngineInstrumentedTest.kt',
+    'mobile/android/app/src/androidTest/java/com/tingji/app/engine/DeepSeekProxyInstrumentedTest.kt',
+} | ANDROID_LICENSE_FILES
 FORBIDDEN_PARTS = {
     '.runtime', '.venv', 'venv', 'node_modules', '__pycache__', 'cache', 'work',
-    '.ai_summary_cache', '转写结果', '人物试听片段',
+    '.ai_summary_cache', '转写结果', '人物试听片段', '.gradle', 'build',
 }
 FORBIDDEN_SUFFIXES = {
     '.wav', '.mp3', '.m4a', '.aac', '.ogg', '.opus', '.flac', '.wma', '.amr',
     '.mp4', '.mkv', '.mov', '.avi', '.webm', '.pem', '.key', '.p12', '.pfx',
     '.zip', '.7z', '.rar', '.db', '.sqlite', '.pt', '.pth', '.onnx', '.safetensors',
-    '.pyc', '.log', '.tmp', '.tsbuildinfo',
+    '.pyc', '.log', '.tmp', '.tsbuildinfo', '.aar', '.apk', '.aab', '.jks',
+    '.keystore', '.dex', '.so', '.class', '.hprof', '.jar',
 }
 PATTERNS = {
     'API credential pattern': re.compile(r'(?<![\w-])(?:sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,})(?![\w-])'),
@@ -60,9 +114,11 @@ def allowed(name: str) -> bool:
     path = PurePosixPath(name)
     if any(part.lower() in FORBIDDEN_PARTS for part in path.parts):
         return False
-    if path.suffix.lower() in FORBIDDEN_SUFFIXES or path.name.lower() == 'settings.json' or path.name.startswith('.env'):
+    if name == ANDROID_WRAPPER:
+        return True  # The audit below requires the exact reviewed upstream bytes.
+    if path.suffix.lower() in FORBIDDEN_SUFFIXES or path.name.lower() in {'settings.json', 'local.properties'} or path.name.startswith('.env'):
         return False
-    if name in ROOT_FILES or name in WEB_FILES or name in BRAND_FILES or name in SCREENSHOT_FILES or name in BUILD_FILES or name == 'scripts/check_publish.py':
+    if name in ROOT_FILES or name in WEB_FILES or name in BRAND_FILES or name in SCREENSHOT_FILES or name in BUILD_FILES or name in ANDROID_FILES or name == 'scripts/check_publish.py':
         return True
     if len(path.parts) == 2 and path.parts[0] == 'meeting_tool' and path.suffix == '.py':
         return True
@@ -71,6 +127,10 @@ def allowed(name: str) -> bool:
     if name.startswith('web/src/') and path.suffix in {'.ts', '.tsx', '.css'}:
         return True
     return bool(re.fullmatch(r'web/dist/assets/index-[A-Za-z0-9_-]+\.(?:js|css)', name))
+
+
+def valid_android_wrapper(content: bytes) -> bool:
+    return len(content) == ANDROID_WRAPPER_BYTES and hashlib.sha256(content).hexdigest() == ANDROID_WRAPPER_SHA256
 
 
 def valid_screenshot(content: bytes) -> bool:
@@ -148,6 +208,10 @@ def audit(ref: str | None) -> int:
             continue
         if size > 3 * 1024 * 1024:
             findings.append((name, 'unexpectedly large file'))
+            continue
+        if name == ANDROID_WRAPPER:
+            if not valid_android_wrapper(content):
+                findings.append((name, 'Gradle wrapper does not match the pinned upstream bytes'))
             continue
         if name in SCREENSHOT_FILES:
             if not valid_screenshot(content):

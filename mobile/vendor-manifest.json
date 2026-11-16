@@ -1,0 +1,203 @@
+{
+  "schema_version": 1,
+  "runtime": [
+    {
+      "name": "sherpa-onnx-2.0.1",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v2.0.1/sherpa-onnx-2.0.1.aar",
+      "sha256": "a8d09d1d32f3eb8520482c6d3d43fae674681c5b050385967c70a3c2c9bf0ee7",
+      "bytes": 49441341,
+      "path": "android/app/libs/sherpa-onnx-2.0.1.aar",
+      "apk_path": null
+    },
+    {
+      "name": "silero_vad",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx",
+      "sha256": "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6",
+      "bytes": 643854,
+      "path": "android/app/src/main/assets/models/silero_vad.onnx",
+      "apk_path": "assets/models/silero_vad.onnx"
+    },
+    {
+      "name": "speaker_embedding",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx",
+      "sha256": "aa3cfc16963a10586a9393f5035d6d6b57e98d358b347f80c2a30bf4f00ceba2",
+      "bytes": 28281164,
+      "path": "android/app/src/main/assets/models/speaker_embedding.onnx",
+      "apk_path": "assets/models/speaker_embedding.onnx"
+    }
+  ],
+  "native_libraries": [
+    {
+      "path": "lib/arm64-v8a/libonnxruntime.so",
+      "sha256": "33847ad43bffe204699fd4a27f7f3603452a8cdaf2f9a44983a0bc31ffcf2da1",
+      "bytes": 22249560
+    },
+    {
+      "path": "lib/arm64-v8a/libsherpa-onnx-c-api.so",
+      "sha256": "0eadae93c4d595a26584d7eebde7b397b9a36d01eee3ebc7262e0d34df2fce10",
+      "bytes": 4303136
+    },
+    {
+      "path": "lib/arm64-v8a/libsherpa-onnx-cxx-api.so",
+      "sha256": "de94e0952a124eb22e86d754e11aa0489a065affc837911a8ed5e7fd843baad6",
+      "bytes": 272848
+    },
+    {
+      "path": "lib/arm64-v8a/libsherpa-onnx-jni.so",
+      "sha256": "5db8f89f12b2c900a98c9e01e00c475c59db35e9437a62e36e27839ec48b5575",
+      "bytes": 4609320
+    },
+    {
+      "path": "lib/x86_64/libonnxruntime.so",
+      "sha256": "087e84297cad64acb823c3d901d6e0cc934e91add7cdb20da802cd1c0bea5c3e",
+      "bytes": 25581120
+    },
+    {
+      "path": "lib/x86_64/libsherpa-onnx-c-api.so",
+      "sha256": "8285ecf2e6275374d4c8c5b46020cbb1de82db9bd6b6baad011fdc480cf10ba2",
+      "bytes": 4782648
+    },
+    {
+      "path": "lib/x86_64/libsherpa-onnx-cxx-api.so",
+      "sha256": "edcd50a1608458867d78213385f5e3013a39db7b7af43d4f87d72e4d84e5e3dc",
+      "bytes": 267552
+    },
+    {
+      "path": "lib/x86_64/libsherpa-onnx-jni.so",
+      "sha256": "878d61116f244131263eec24297ef05bf508d02bccdede2a4e3ad3202bbdaa48",
+      "bytes": 5053592
+    }
+  ],
+  "licenses": [
+    {
+      "name": "3D-Speaker-LICENSE.txt",
+      "bytes": 11357,
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    },
+    {
+      "name": "AndroidX-LICENSE.txt",
+      "bytes": 10175,
+      "sha256": "809fa1ed21450f59827d1e9aec720bbc4b687434fa22283c6cb5dd82a47ab9c0"
+    },
+    {
+      "name": "CAMplusplus-model-card.txt",
+      "bytes": 5973,
+      "sha256": "851723ff211e18d8f525d253eb7a3023bc5c57af97ac2f952fb5ba1186274e00"
+    },
+    {
+      "name": "Eigen-3.4.0-MPL2.txt",
+      "bytes": 16726,
+      "sha256": "fab3dd6bdab226f1c08630b1dd917e11fcb4ec5e1e020e2c16f83a0a13863e85"
+    },
+    {
+      "name": "Eigen-3.4.0-README.txt",
+      "bytes": 779,
+      "sha256": "c83230b770f17ef1386ea1fd3681271dd98aa93646bdbfb5bff3a1b7050fff9d"
+    },
+    {
+      "name": "frontend-components.json",
+      "bytes": 38534,
+      "sha256": "824530bb7b91a50833c1c0009953432008c427ff2603c7d5512dfd617311d6b0"
+    },
+    {
+      "name": "frontend-licenses.txt",
+      "bytes": 135629,
+      "sha256": "5d4b2e0b3ee260bd2938399185e1f02ca86cff42956e1055d47c1495f34aede8"
+    },
+    {
+      "name": "hclust-cpp-2026-02-25-LICENSE.txt",
+      "bytes": 1483,
+      "sha256": "e361d842da1d290351860ad6dcce2673a1e42e4f873a3ae1ff4eb92c6adaa882"
+    },
+    {
+      "name": "json-3.12.0-LICENSE.txt",
+      "bytes": 1076,
+      "sha256": "46a65cffd1ea955132d95a8dd921640714a8d6b537d2e4e482d31145ae95b603"
+    },
+    {
+      "name": "kaldi-decoder-0.3.0-LICENSE.txt",
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "name": "kaldi-native-fbank-1.22.4-LICENSE.txt",
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "name": "kaldifst-1.8.0-LICENSE.txt",
+      "bytes": 11728,
+      "sha256": "a682d6efd1ee5dee08a8e405c233c2c198ea70ae0718129daa83ab58cfe31c5d"
+    },
+    {
+      "name": "KissFFT-BSD-3-Clause.txt",
+      "bytes": 1830,
+      "sha256": "4d6bcab46f27d6d0c878e8305d4bdcfe040d52bf6656b9771f04c9fb9902c0ed"
+    },
+    {
+      "name": "KissFFT-COPYING.txt",
+      "bytes": 246,
+      "sha256": "a2840585f8411be8e6826a31ef15ae65c950bd74a2437a73b013398a934ad0c6"
+    },
+    {
+      "name": "KissFFT-Unlicense.txt",
+      "bytes": 1521,
+      "sha256": "c543dab3c100d8741a83b02f397746b1e10fc0046f30b942f308191a68e99407"
+    },
+    {
+      "name": "Kotlin-2.1.21-COPYRIGHT.txt",
+      "bytes": 647,
+      "sha256": "8f1a1700adb5490604c6094fb137bf73f6c28d3ee554b58f3ff8ef975a79672d"
+    },
+    {
+      "name": "Kotlin-2.1.21-LICENSE.txt",
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "name": "license-sources.json",
+      "bytes": 10253,
+      "sha256": "d06fd25a0e6c69a4e3de73d0512e556297196547e5e267396f4ec38891ed3e35"
+    },
+    {
+      "name": "LLVM-runtime-LICENSE.txt",
+      "bytes": 16703,
+      "sha256": "539dd7aed86e8a4f12cbdd0e6c50c189c7d74847e4fecc64ce2c6ee3a01da38b"
+    },
+    {
+      "name": "onnxruntime-1.28.2-LICENSE.txt",
+      "bytes": 1073,
+      "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c"
+    },
+    {
+      "name": "onnxruntime-1.28.2-ThirdPartyNotices.txt",
+      "bytes": 325054,
+      "sha256": "0e07b95f3a8d6230037707c5c4a2b554d12c4cb67369669ac255635528ffcee2"
+    },
+    {
+      "name": "OpenFst-1.8.5-LICENSE.txt",
+      "bytes": 559,
+      "sha256": "4300529197035fd3452350718a0b8cee984e9412c9932d7f35fcde849fc97a4b"
+    },
+    {
+      "name": "sherpa-onnx-2.0.1-LICENSE.txt",
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "name": "Silero-VAD-LICENSE.txt",
+      "bytes": 1075,
+      "sha256": "2e63e9a38b6e8fc0c7bc37ce174caca1862870856c6daf5697cfb785e925520b"
+    },
+    {
+      "name": "simple-sentencepiece-0.7-LICENSE.txt",
+      "bytes": 11357,
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    },
+    {
+      "name": "utf8proc-2.12.0-LICENSE.txt",
+      "bytes": 5125,
+      "sha256": "3b510150d34f248a221bb88e1d811238d6c6c18b51231822c42974c39bb07256"
+    }
+  ]
+}

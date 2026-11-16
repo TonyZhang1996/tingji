@@ -5,6 +5,14 @@
 *.css text eol=lf
 *.json text eol=lf
 *.md text eol=lf
+*.kt text eol=lf
+*.kts text eol=lf
+*.properties text eol=lf
+*.xml text eol=lf
+mobile/android/gradlew text eol=lf
+# Preserve pinned upstream notice bytes so checkout cannot change their hashes.
+mobile/android/app/src/main/assets/licenses/** -text
+*.jar -text
 *.cmd text eol=crlf
 # Windows Script Host needs the UTF-16 BOM for these Chinese launchers.
 *.vbs -text

@@ -2,13 +2,13 @@
 
 [简体中文](README.md) · **English**
 
-A Windows desktop tool for meeting recordings: transcribe audio by speaker, listen back and correct the text, then generate a meeting summary with action items at the end.
+A Windows and Android tool for meeting recordings: transcribe audio by speaker, listen back and correct the text, then generate a meeting summary with action items at the end.
 
-The interface uses React, shadcn/ui and pywebview. Speaker analysis runs locally; transcription and summaries use the DeepSeek API.
+The interface uses React and shadcn/ui, hosted by pywebview on Windows and Kotlin with the system WebView on Android. Speaker analysis runs locally; transcription and summaries use the DeepSeek API.
 
 ## Interface preview
 
-These screenshots show the actual interface with fictional meeting content, roles and action items. They do not demonstrate transcription or speaker-recognition accuracy. The interface shown is in Chinese.
+These screenshots show the actual Windows desktop interface with fictional meeting content, roles and action items. They do not demonstrate transcription or speaker-recognition accuracy. The interface shown is in Chinese.
 
 ### Speaker transcripts and playback
 
@@ -49,6 +49,14 @@ The installer supports 64-bit Windows 10/11 and runs on the CPU; a GPU or CUDA i
 Transcription and summarization require an internet connection and **your own DeepSeek API key**. Charges apply to your DeepSeek account. The installer contains no personal API keys, recordings, transcripts or summaries.
 
 The default installation folder is `%LOCALAPPDATA%\Programs\Tingji`. Tasks, audio caches, transcripts and summaries are stored in `%LOCALAPPDATA%\Tingji`. Uninstalling preserves this personal data; unwanted tasks can be deleted within Tingji. The current installer is not code-signed.
+
+### Android prerelease
+
+The first Android prerelease is **2.3.0-android.1**, targeting ARM64 phones such as the vivo X300. Import an existing recording through the system picker or share menu, analyze speakers locally, then call DeepSeek directly with your own API key. Models are bundled in the APK; no Python or manual model setup is needed. The interface is in Chinese.
+
+Download the [Android APK](https://github.com/TonyZhang1996/tingji/releases/download/v2.3.0-android.1/Tingji-2.3.0-android.1-arm64-v8a.apk) (about 60 MB, ARM64 devices running Android 8.0 or later). Physical vivo X300 validation is still pending. Processing time, thermals, battery use and recognition accuracy need device testing. See the [release notes](https://github.com/TonyZhang1996/tingji/releases/tag/v2.3.0-android.1) for verified results and the [Android guide](mobile/README.md#english) for use and privacy details.
+
+**Uninstalling Android deletes app-private data.** Keep separate copies of source recordings and export important text results first. The Windows installer continues to preserve its local data on uninstall.
 
 ### Running from source
 

@@ -6,8 +6,11 @@ export type AiSummary = { status:'empty'|'running'|'complete'|'error'|'cancelled
 export type Job = { id: string; title: string; source_path?: string; duration_seconds?: number; speaker_count?: number; updated_at?: string; status?: string; old_version?: boolean; speaker_names?: Record<string,string>; warnings?: string[]; audio_url?: string; samples?: Sample[]; segments?: Segment[]; turns?: Segment[]; complete?: boolean; exports?: Record<string,{available:boolean}>;ai_summary?:AiSummary }
 export type Settings = { num_speakers: number; output_root: string; hourly_price: number; max_workers: number; retry_uncertain: boolean }
 export type AppState = { version: string; source: { path:string; name:string; duration_seconds:number; channels?:number; audio_url?:string } | null; settings:Settings; jobs:Job[]; selected_job: Job|null; task: { running:boolean; stage:string; current:number; total:number; message:string; cancel_requested?:boolean }; logs:{time:string;message:string}[] }
+import { isAndroidApp, nativeRequest } from './android-bridge'
+
 declare global { interface Window { __MEETING_TOKEN__?:string } }
 export async function api(path:string, body?:unknown):Promise<AppState> {
+ if(isAndroidApp()) return nativeRequest<AppState>(path,body)
  const response = await fetch(`/api/${path}`, { method:body===undefined?'GET':'POST', credentials:'same-origin', headers:{'X-Meeting-Token':window.__MEETING_TOKEN__||'', ...(body===undefined?{}:{'Content-Type':'application/json'})}, ...(body===undefined?{}:{body:JSON.stringify(body)}) })
  const result = await response.json()
  if(!response.ok) throw new Error(result.message || `操作未完成（${response.status}）`)
