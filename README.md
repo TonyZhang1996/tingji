@@ -6,6 +6,12 @@
 
 界面使用 React 和 shadcn/ui，Windows 由 pywebview 承载，Android 由 Kotlin 和系统 WebView 承载。人物分析在本地完成，文字转写与总结使用 DeepSeek API。
 
+## 38 秒认识听记
+
+从导入录音到分人物转写、回听校对、总体与逐人总结、待办和导出分享，快速了解听记的使用过程。视频为 9:16 竖屏，配中文旁白和字幕，所有会议内容均为虚构演示数据。
+
+[▶ 观看或下载 38 秒介绍视频（MP4）](https://github.com/TonyZhang1996/tingji/releases/download/media-2026-11-17/Tingji-introduction-38s.mp4)
+
 ## 界面预览
 
 以下为 Windows 桌面版真实界面截图，会议内容、人物和待办均为虚构演示数据，不代表实际转写或人物识别效果。

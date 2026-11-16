@@ -6,6 +6,12 @@ A Windows and Android tool for meeting recordings: transcribe audio by speaker, 
 
 The interface uses React and shadcn/ui, hosted by pywebview on Windows and Kotlin with the system WebView on Android. Speaker analysis runs locally; transcription and summaries use the DeepSeek API.
 
+## Tingji in 38 seconds
+
+See the workflow from importing a recording to speaker transcripts, playback review, overall and per-speaker summaries, action items and exports. This portrait (9:16) video has Chinese narration and captions. All meeting content is fictional demo data.
+
+[▶ Watch or download the 38-second introduction (MP4)](https://github.com/TonyZhang1996/tingji/releases/download/media-2026-11-17/Tingji-introduction-38s.mp4)
+
 ## Interface preview
 
 These screenshots show the actual Windows desktop interface with fictional meeting content, roles and action items. They do not demonstrate transcription or speaker-recognition accuracy. The interface shown is in Chinese.
