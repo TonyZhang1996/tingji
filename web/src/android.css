@@ -195,3 +195,39 @@ html.android-app {
   .android-app .summary-actions-label { flex: 1 1 auto; }
   .android-app .summary-action-buttons { flex: 0 0 auto; }
 }
+
+/* Keep the same virtual transcript mounted while lending it the whole screen. */
+.android-app .android-reading-mode .topbar,
+.android-app .android-reading-mode .document-header,
+.android-app .android-reading-mode .action-strip,
+.android-app .android-reading-mode .editor-toolbar,
+.android-app .android-reading-mode .filter-row,
+.android-app .android-reading-mode .transcript-footer,
+.android-app .android-reading-mode .audio-player,
+.android-app .android-reading-mode .android-navigation,
+.android-app .android-reading-mode .connection-banner,
+.android-app .android-reading-mode .task-progress { display: none; }
+.android-app .android-reading-mode .main-shell { padding-left: 0; }
+.android-app .android-reading-mode .editor-layout { flex: 1; min-height: 0; }
+.android-app .android-reading-mode .transcript-scroll { padding: 0 20px; }
+.android-app .android-reading-mode .segment-text { font-size: 17px; line-height: 1.9; }
+.android-app .android-reading-bar {
+ display: flex; align-items: center; gap: 8px; flex: 0 0 auto;
+ min-height: calc(56px + var(--android-safe-top)); padding: var(--android-safe-top) 8px 0;
+ border-bottom: 1px solid var(--border); background: #fff;
+}
+.android-app .android-reading-bar>button { min-width: 48px; height: 48px; flex-shrink: 0; padding: 0 10px; gap: 7px; }
+.android-app .android-reading-bar>div { flex: 1; min-width: 0; }
+.android-app .android-reading-bar strong { display: block; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.android-app .android-reading-bar span { display: block; font-size: 12px; color: #69717e; }
+.android-app .android-reading-trigger { gap: 6px; color: #4051bc; }
+.android-app .android-welcome-dialog { display: flex; flex-direction: column; padding: 0; gap: 0; overflow: hidden; }
+.android-app .android-welcome-dialog>[data-slot=dialog-header] { padding: 24px 20px 18px; flex-shrink: 0; }
+.android-app .android-welcome-dialog [data-slot=dialog-title] { padding-right: 0; outline: none; }
+.android-app .android-welcome-content { padding: 0 20px 20px; min-height: 0; overflow-y: auto; }
+.android-app .android-welcome-content .password-field { margin-top: 8px; }
+.android-app .android-welcome-note { display: flex; gap: 10px; align-items: flex-start; margin-top: 20px; padding: 14px; background: #f3f6fb; border-radius: 8px; }
+.android-app .android-welcome-note>svg { color: #586d8a; flex-shrink: 0; margin-top: 2px; }
+.android-app .android-welcome-note p { margin: 0; font-size: 13px; line-height: 1.8; color: #4d596b; }
+.android-app .android-welcome-dialog>[data-slot=dialog-footer] { flex-shrink: 0; padding: 12px 20px; border-top: 1px solid var(--border); }
+.android-app .android-welcome-dialog>[data-slot=dialog-footer]>button { flex: 1; }

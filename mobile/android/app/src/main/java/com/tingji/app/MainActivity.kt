@@ -194,7 +194,16 @@ class MainActivity : ComponentActivity() {
                     }
                     "analyze", "transcribe", "summarize" -> host.foregroundOperation(
                         { host.engine.dispatch(action, payload) }, { respond(id, it) })
-                    else -> host.io.execute { respond(id, runCatching { host.engine.dispatch(action, payload) }) }
+                    else -> host.io.execute {
+                        val result = runCatching { host.engine.dispatch(action, payload) }
+                        if (action == "config" && result.isSuccess) runOnUiThread {
+                            if (!destroyed) {
+                                webView.clearFocus()
+                                WindowCompat.getInsetsController(window, webView).hide(WindowInsetsCompat.Type.ime())
+                            }
+                        }
+                        respond(id, result)
+                    }
                 }
             }
         }

@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
+import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { AudioLines, ArrowDownToLine, ArrowRight, Check, CheckCheck, CheckCircle2, ChevronDown, Clock3, Copy, FileAudio2, FileText, Folder, Headphones, ListFilter, Loader2, Menu, Pause, PencilLine, Play, Plus, Search, Settings2, ShieldCheck, SkipBack, SkipForward, SlidersHorizontal, Square, UsersRound, Volume2, X, Eye, EyeOff, AlertCircle, PanelRightClose, PanelRightOpen, Trash2 } from 'lucide-react'
+import { AudioLines, ArrowDownToLine, ArrowRight, Check, CheckCheck, CheckCircle2, ChevronDown, Clock3, Copy, FileAudio2, FileText, Folder, Headphones, ListFilter, Loader2, Menu, Pause, PencilLine, Play, Plus, Search, Settings2, ShieldCheck, SkipBack, SkipForward, SlidersHorizontal, Square, UsersRound, Volume2, X, Eye, EyeOff, AlertCircle, PanelRightClose, PanelRightOpen, Trash2, Maximize2, Minimize2 } from 'lucide-react'
 import { Toaster, toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -15,8 +15,12 @@ import { api, clock, speakerLabel, type AppState, type Job, type Segment, type S
 import { cn } from '@/lib/utils'
 import { SummaryPanel } from '@/components/summary-panel'
 import { copyToClipboard, isAndroidApp } from '@/lib/android-bridge'
+import { AndroidWelcome } from '@/components/android-welcome'
 
 const INITIAL:AppState={version:'2.2',source:null,settings:{num_speakers:2,output_root:'',hourly_price:.39,max_workers:2,retry_uncertain:false},jobs:[],selected_job:null,task:{running:false,stage:'',current:0,total:0,message:''},logs:[]}
+type TranscriptPosition={top:number;anchorId?:string;inset:number}
+type TranscriptController={capture:()=>TranscriptPosition}
+type TranscriptRestore={serial:number;position:TranscriptPosition|null}
 const COLORS=['blue','teal','violet','amber','rose','cyan']
 const colorFor=(speaker:string)=>COLORS[(Math.max(1,parseInt(speaker.replace(/\D/g,''))||1)-1)%COLORS.length]
 const statusName=(job:Job)=>job.old_version?'旧版任务':job.complete||job.status==='complete'?'已完成':job.status==='running'||job.status==='processing'?'处理中':job.status==='analyzed'?'待转写':job.status==='partial'?'未完成':'已保存'
@@ -31,6 +35,15 @@ export default function App(){
  const [settingsOpen,setSettingsOpen]=useState(false)
  const [startAfterSettings,setStartAfterSettings]=useState(false)
  const [apiKey,setApiKey]=useState('')
+ const [welcomeOpen,setWelcomeOpen]=useState(false)
+ const [welcomeNeedsMarker,setWelcomeNeedsMarker]=useState(false)
+ const welcomeHandled=useRef(false)
+ const [readingMode,setReadingMode]=useState(false)
+ const [readingPlaying,setReadingPlaying]=useState(false)
+ const transcriptController=useRef<TranscriptController|null>(null)
+ const normalPosition=useRef<TranscriptPosition|null>(null)
+ const restoreSerial=useRef(0)
+ const [transcriptRestore,setTranscriptRestore]=useState<TranscriptRestore|null>(null)
  const [query,setQuery]=useState('')
  const [historyQuery,setHistoryQuery]=useState('')
  const [filter,setFilter]=useState('all')
@@ -74,7 +87,19 @@ export default function App(){
  },[])
  useEffect(()=>{let alive=true;let active=false;async function poll(){if(active||actionPending.current)return;active=true;const revision=stateRevision.current;try{const next=await api('state');if(alive&&revision===stateRevision.current)applyState(next)}catch(error){if(alive&&revision===stateRevision.current)setConnectionError((error as Error).message)}finally{active=false}}void poll();const timer=setInterval(poll,1200);return()=>{alive=false;clearInterval(timer)}},[applyState])
  useEffect(()=>{const token=JSON.stringify([job?.id,job?.speaker_names]);if(token!==namesSync.current){namesSync.current=token;setNames({...job?.speaker_names})}},[job?.id,job?.speaker_names])
- useEffect(()=>{setQuery('');setFilter('all');setEditorView('transcript');setPlayTime(0);sampleRef.current?.pause();setSamplePlaying('')},[job?.id,audioUrl])
+ useEffect(()=>{setReadingMode(false);normalPosition.current=null;setTranscriptRestore(null);setQuery('');setFilter('all');setEditorView('transcript');setPlayTime(0);sampleRef.current?.pause();setSamplePlaying('')},[job?.id,audioUrl])
+ useEffect(()=>{
+  if(android&&connected&&!welcomeHandled.current){welcomeHandled.current=true;if(state.settings.api_key_prompt_seen!==true)setWelcomeOpen(true)}
+ },[android,connected,state.settings.api_key_prompt_seen])
+ useEffect(()=>{
+  const audio=audioRef.current;if(!audio)return
+  const update=()=>setReadingPlaying(!audio.paused&&!audio.ended)
+  audio.addEventListener('play',update);audio.addEventListener('pause',update);audio.addEventListener('ended',update);update()
+  return()=>{audio.removeEventListener('play',update);audio.removeEventListener('pause',update);audio.removeEventListener('ended',update)}
+ },[audioUrl])
+ function enterReading(){normalPosition.current=transcriptController.current?.capture()||null;setTranscriptRestore({serial:++restoreSerial.current,position:normalPosition.current});setInspectorOpen(false);setSidebarOpen(false);setReadingMode(true)}
+ function exitReading(){const position=query||filter!=='all'?normalPosition.current:(transcriptController.current?.capture()||normalPosition.current);setTranscriptRestore({serial:++restoreSerial.current,position});setReadingMode(false)}
+ function toggleReadingAudio(){const audio=audioRef.current;if(!audio||!audioUrl)return;if(audio.paused)void audio.play().catch(()=>toast.error('录音暂时无法播放，请稍后重试。'));else audio.pause()}
  useEffect(()=>{
   if(!android)return
   const refresh=()=>{if(!actionPending.current)void api('state').then(applyState).catch(()=>{})}
@@ -94,14 +119,21 @@ export default function App(){
    if(deleting&&!busy){setDeleting(null);return true}
    if(settingsOpen){setSettingsOpen(false);setStartAfterSettings(false);return true}
    if(logsOpen){setLogsOpen(false);return true}
+   if(readingMode){exitReading();return true}
    if(sidebarOpen){setSidebarOpen(false);return true}
    if(inspectorOpen){setInspectorOpen(false);return true}
    if(editorView==='summary'){setEditorView('transcript');return true}
    return false
   }
   return()=>{delete window.__TINGJI_ANDROID_BACK__}
- },[android,editing,deleting,busy,settingsOpen,logsOpen,sidebarOpen,inspectorOpen,editorView])
+ },[android,editing,deleting,busy,settingsOpen,logsOpen,sidebarOpen,inspectorOpen,editorView,readingMode,query,filter])
  const action=useCallback(async(path:string,body:unknown={})=>{if(actionPending.current)return null;actionPending.current=true;stateRevision.current++;setBusy(path);try{const next=await api(path,body);applyState(next);return next}catch(error){toast.error((error as Error).message);return null}finally{actionPending.current=false;setBusy('')}},[applyState])
+ useEffect(()=>{
+  if(!android||!welcomeNeedsMarker||!connected||running||busy)return
+  setWelcomeNeedsMarker(false)
+  void action('config',{api_key_prompt_seen:true})
+ },[android,welcomeNeedsMarker,connected,running,busy,action])
+ function finishWelcome(){setWelcomeOpen(false);setWelcomeNeedsMarker(true)}
  async function chooseAudio(){const next=await action('choose_audio');if(next?.source){setSourceView(false);setSidebarOpen(false)}}
  async function analyze(){setSourceView(false);await action('analyze')}
  async function transcribe(){if(!apiKey.trim()){setStartAfterSettings(true);setSettingsOpen(true);return}setSourceView(false);await action('transcribe',{api_key:apiKey.trim(),retry_uncertain:state.settings.retry_uncertain})}
@@ -121,10 +153,10 @@ export default function App(){
  async function markReviewed(segment:Segment){await action('segment_review',{id:segment.id,reviewed:!segment.reviewed})}
  async function copyText(){const text=segments.filter(s=>s.state==='done').map(s=>`${speakerLabel(s.speaker,job?.speaker_names)} ${clock(s.start,true)}\n${s.text}`).join('\n\n');try{await copyToClipboard(text);toast.success('已复制分人物文字')}catch{toast.error('复制未完成，请使用导出文件。')}}
  const history=state.jobs.filter(j=>j.title.toLowerCase().includes(historyQuery.toLowerCase()))
- const filtered=useMemo(()=>segments.filter(s=>(!query||s.text.toLowerCase().includes(query.toLowerCase())||speakerLabel(s.speaker,job?.speaker_names).includes(query))&&(filter==='all'||filter==='uncertain'&&s.uncertain&&!s.reviewed||filter==='reviewed'&&s.reviewed||filter===s.speaker)),[segments,query,filter,job?.speaker_names])
+ const filtered=useMemo(()=>readingMode?segments:segments.filter(s=>(!query||s.text.toLowerCase().includes(query.toLowerCase())||speakerLabel(s.speaker,job?.speaker_names).includes(query))&&(filter==='all'||filter==='uncertain'&&s.uncertain&&!s.reviewed||filter==='reviewed'&&s.reviewed||filter===s.speaker)),[segments,query,filter,job?.speaker_names,readingMode])
  const analyzed=Boolean(job&&segments.length)
  const sourceAvailable=Boolean(state.source||job)
- return <TooltipProvider delayDuration={350}><div className={cn("workbench",android&&"android-workbench",android&&!sourceAvailable&&"android-empty-view",android&&inspectorOpen&&analyzed&&!running&&"android-people-view",android&&editorView==='summary'&&!inspectorOpen&&!running&&"android-summary-view")}>
+ return <TooltipProvider delayDuration={350}><div className={cn("workbench",android&&"android-workbench",android&&readingMode&&"android-reading-mode",android&&!sourceAvailable&&"android-empty-view",android&&inspectorOpen&&analyzed&&!running&&"android-people-view",android&&editorView==='summary'&&!inspectorOpen&&!running&&"android-summary-view")}>
   {sidebarOpen&&<button className="mobile-backdrop" aria-label="收起任务导航" onClick={()=>setSidebarOpen(false)}/>}
   <aside className={cn('sidebar',sidebarOpen&&'is-open')} aria-label="录音任务" aria-hidden={android&&!sidebarOpen?true:undefined} inert={android&&!sidebarOpen?true:undefined}>
    <div className="brand"><div className="brand-symbol"><AudioLines size={23} strokeWidth={2.1}/></div><div><strong>听记</strong><span>{android?'手机会议转写':'会议转写工作台'}</span></div>{android&&<IconButton className="history-close" label="关闭任务列表" onClick={()=>setSidebarOpen(false)}><X/></IconButton>}</div>
@@ -135,6 +167,7 @@ export default function App(){
    <div className="sidebar-bottom"><div className="local-note"><ShieldCheck size={15}/><span>任务与文字保存在本机</span><span className="local-dot"/></div><button className="sidebar-settings" onClick={()=>{setStartAfterSettings(false);setSettingsOpen(true)}}><Settings2 size={17}/><span>转写设置</span><ChevronDown size={14}/></button><div className="sidebar-version">DeepSeek 语音转写<span>v{state.version||'2.1'}</span></div></div>
   </aside>
   <main className="main-shell" inert={android&&sidebarOpen?true:undefined}>
+   {android&&readingMode&&<div className="android-reading-bar"><Button variant="ghost" aria-label="退出全屏阅读" onClick={exitReading}><Minimize2 size={18}/>退出</Button><div><strong>{selectedTitle}</strong><span>全部 {segments.length} 个片段</span></div><IconButton label={readingPlaying?'暂停录音':'播放录音'} disabled={!audioUrl} onClick={toggleReadingAudio}>{readingPlaying?<Pause size={20}/>:<Play size={20}/>}</IconButton></div>}
    <header className="topbar"><div className="topbar-location"><IconButton label="打开任务导航" className="mobile-menu" onClick={()=>setSidebarOpen(true)}><Menu/></IconButton><span className="workspace-label">{android?'听记':'录音任务'}</span></div><div className="topbar-actions">{(!connected||connectionError)&&<span className={cn('connection-state',connectionError&&'is-error')}><span/>{connectionError?'连接中断':'正在连接'}</span>}{android&&<IconButton label="转写设置" onClick={()=>{setStartAfterSettings(false);setSettingsOpen(true)}}><Settings2/></IconButton>}<IconButton label="查看处理记录" onClick={()=>setLogsOpen(true)}><Clock3/></IconButton></div></header>
    {connectionError&&<div className="connection-banner" role="status"><AlertCircle size={16}/>{android?'手机服务暂时未响应，正在恢复任务状态。':'本地连接暂时中断，正在重连。请保持桌面窗口开启。'}</div>}
    <section className="document-header"><div className="document-heading"><div className="document-title"><h1 title={selectedTitle}>{selectedTitle}</h1><div className="document-meta">{sourceAvailable?<><span><Clock3 size={13}/>{clock(duration,true)}</span>{analyzed&&<span><UsersRound size={13}/>{speakerIds.length} 位说话人</span>}</>:<span>请选择本地录音</span>}</div></div>{job&&<Badge variant="secondary" className={cn('status-badge',job.complete&&'complete')}>{job.complete?<CheckCircle2 size={12}/>:running?<Loader2 size={12} className="spin"/>:null}{running?'正在处理':statusName(job)}</Badge>}</div><div className="document-tools"><IconButton label="复制完整文字" disabled={!doneCount} onClick={()=>void copyText()}><Copy/></IconButton><Select value="" onValueChange={value=>void action('open_output',{format:value})} disabled={!doneCount||!!busy}><SelectTrigger className="export-trigger"><ArrowDownToLine size={15}/><SelectValue placeholder="导出文字"/></SelectTrigger><SelectContent>{[['txt','纯文字 TXT'],['md','Markdown'],['csv','分段明细 CSV'],['json','结构化 JSON'],['srt','片段字幕 SRT']].map(([value,label])=><SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select><IconButton label={inspectorOpen?'收起人物面板':'展开人物面板'} className="panel-toggle" onClick={()=>setInspectorOpen(!inspectorOpen)}>{inspectorOpen?<PanelRightClose/>:<PanelRightOpen/>}</IconButton></div></section>
@@ -147,6 +180,7 @@ export default function App(){
        <div className="editor-tabs">
         <button className={editorView==='transcript'&&filter!=='uncertain'?'active':''} aria-pressed={editorView==='transcript'&&filter!=='uncertain'} onClick={()=>{setEditorView('transcript');setFilter('all')}}>分人物文字<span>{segments.length}</span></button>
         <button onClick={()=>{setEditorView('transcript');setFilter(editorView==='transcript'&&filter==='uncertain'?'all':'uncertain')}} aria-pressed={editorView==='transcript'&&filter==='uncertain'} className={cn(editorView==='transcript'&&filter==='uncertain'&&'active selected-filter')}>待核片段<span className={uncertainCount?'amber-count':''}>{uncertainCount}</span></button>
+        {android&&<button className="android-reading-trigger" aria-label="全屏阅读" onClick={enterReading}><Maximize2 size={14}/>全屏阅读</button>}
         <button className={cn('summary-tab',editorView==='summary'&&'active')} aria-pressed={editorView==='summary'} onClick={()=>setEditorView('summary')}>AI 总结{job?.ai_summary?.report&&<span className="summary-tab-dot" aria-label="已生成总结"/>}</button>
        </div>
        {editorView==='transcript'&&<div className="transcript-search"><Search size={15}/><Input aria-label="搜索转写内容" placeholder="搜索文字或人物" value={query} onChange={e=>setQuery(e.target.value)}/>{query&&<button aria-label="清除搜索" onClick={()=>setQuery('')}><X size={13}/></button>}</div>}
@@ -154,7 +188,7 @@ export default function App(){
       {editorView==='summary'?<SummaryPanel job={job!} apiKey={apiKey} setApiKey={setApiKey} busy={!!busy} running={running} task={state.task} onGenerate={async(allowPartial,retryFailed)=>Boolean(await action('summarize',{api_key:apiKey.trim(),allow_partial:allowPartial,retry_failed:retryFailed}))} onCancel={()=>void action('cancel_summary')} onOpen={()=>void action('open_summary')}/>:<>
        <div className="filter-row"><Select value={filter} onValueChange={setFilter}><SelectTrigger className="filter-select"><ListFilter size={13}/><SelectValue/></SelectTrigger><SelectContent><SelectItem value="all">全部片段</SelectItem><SelectItem value="uncertain">仅看待核</SelectItem><SelectItem value="reviewed">已校对</SelectItem>{speakerIds.map(id=><SelectItem key={id} value={id}>{speakerLabel(id,job?.speaker_names)}</SelectItem>)}</SelectContent></Select>{(query||filter!=='all')&&<span>{filtered.length} 个片段</span>}<span className="reviewed-count"><CheckCheck size={13}/>{reviewedCount} 段已校对</span></div>
        {job?.old_version&&<div className="inline-notice"><AlertCircle size={15}/>这是旧版人物结果。重新分析会另建任务，并保留这份文字。</div>}
-       <TranscriptList items={filtered} names={job?.speaker_names} playTime={playTime} onPlay={playAt} onEdit={openEdit} onReview={segment=>void markReviewed(segment)} disabled={!!busy||running}/>
+       <TranscriptList controller={transcriptController} restoreRequest={transcriptRestore} listIdentity={android?`${job?.id}|${readingMode?'reading':`${query}|${filter}`}`:undefined} items={filtered} names={job?.speaker_names} playTime={playTime} onPlay={playAt} onEdit={openEdit} onReview={segment=>void markReviewed(segment)} disabled={!!busy||running}/>
        <div className="transcript-footer"><span>自动转写初稿，人物与关键数字请回听确认。</span><span>{doneCount}/{segments.length} 已转写</span></div>
       </>}
      </>:<EmptyState source={state.source} chooseAudio={chooseAudio} busy={!!busy||running} settings={state.settings} configure={settings=>void action('config',settings)} analyzing={running}/>}
@@ -174,6 +208,7 @@ export default function App(){
   </nav>}
  </div>
  <Dialog open={!!deleting} onOpenChange={open=>{if(!open&&!busy)setDeleting(null)}}><DialogContent showCloseButton={!busy} className="delete-dialog" onOpenAutoFocus={event=>{event.preventDefault();deleteCancelRef.current?.focus()}} onCloseAutoFocus={event=>{event.preventDefault();if(deletedRef.current){(historyRef.current?.querySelector<HTMLButtonElement>('.history-item:not(:disabled)')||newTaskRef.current)?.focus();deletedRef.current=false}else deleteTriggerRef.current?.focus()}}><DialogHeader><DialogTitle>删除这条录音任务？</DialogTitle><DialogDescription>将从历史列表中移除，并永久删除本机保存的转写文字、人物校对、AI 总结及音频缓存。{android?'从其它应用导入的原始文件会保留。请先导出需要保存的结果。':'原始录音文件会保留。'}</DialogDescription></DialogHeader><p className="delete-job-title">{deleting?.title}</p><p className="delete-warning">此操作无法撤销，删除后需重新分析和转写。</p><DialogFooter><Button ref={deleteCancelRef} variant="outline" disabled={!!busy} onClick={()=>setDeleting(null)}>取消</Button><Button variant="destructive" disabled={!!busy||running} onClick={()=>void deleteJob()}>{busy==='delete_job'?<Loader2 className="spin"/>:<Trash2 size={15}/>} {busy==='delete_job'?'正在删除…':'删除任务'}</Button></DialogFooter></DialogContent></Dialog>
+ {android&&<AndroidWelcome open={welcomeOpen} apiKey={apiKey} onKeyChange={setApiKey} onComplete={finishWelcome}/>}
  <SettingsDialog open={settingsOpen} onOpenChange={open=>{setSettingsOpen(open);if(!open)setStartAfterSettings(false)}} settings={state.settings} apiKey={apiKey} setApiKey={setApiKey} busy={!!busy||running} startAfter={startAfterSettings} chooseOutput={async()=>{const next=await action('choose_output');return next?.settings.output_root}} save={async(settings)=>{const next=await action('config',settings);if(next){setSettingsOpen(false);if(startAfterSettings){setStartAfterSettings(false);if(!apiKey.trim()){toast.error('请填写 DeepSeek API Key');return}await action('transcribe',{api_key:apiKey.trim(),retry_uncertain:settings.retry_uncertain})}else toast.success('转写设置已保存')}}}/>
  <Dialog open={!!editing} onOpenChange={open=>!open&&setEditing(null)}><DialogContent className="edit-dialog"><DialogHeader><DialogTitle>校对这一段发言</DialogTitle><DialogDescription>{editing&&`${clock(editing.start,true)} — ${clock(editing.end,true)}`}　修改会保存在本机，并同步到导出文件。</DialogDescription></DialogHeader><div className="edit-speaker-row"><label>说话人</label><Select value={draftSpeaker} onValueChange={setDraftSpeaker}><SelectTrigger><SelectValue/></SelectTrigger><SelectContent>{speakerIds.map(id=><SelectItem value={id} key={id}>{speakerLabel(id,job?.speaker_names)}</SelectItem>)}</SelectContent></Select><Button variant="outline" onClick={()=>editing&&playAt(editing.start)}><Play size={14}/>回听本段</Button></div><label htmlFor="transcript-edit" className="field-label">发言内容</label><Textarea id="transcript-edit" className="transcript-textarea" value={draftText} onChange={e=>setDraftText(e.target.value)}/><DialogFooter><Button variant="outline" onClick={()=>setEditing(null)}>取消</Button><Button disabled={!!busy} onClick={()=>void saveReview()}>{busy?<Loader2 className="spin"/>:<CheckCheck size={15}/>}保存并标记已校对</Button></DialogFooter></DialogContent></Dialog>
  <Dialog open={logsOpen} onOpenChange={setLogsOpen}><DialogContent className="logs-dialog"><DialogHeader><DialogTitle>处理记录</DialogTitle><DialogDescription>查看当前任务的分析、转写与恢复进度。</DialogDescription></DialogHeader><div className="log-list">{state.logs.length?state.logs.map((line,i)=><div key={i}><time>{line.time}</time><p>{line.message}</p></div>):<p className="no-logs">还没有处理记录。选择录音后开始分析。</p>}</div></DialogContent></Dialog>
@@ -192,11 +227,35 @@ function EmptyState({source,chooseAudio,busy,settings,configure}:{source:AppStat
  </div>
 }
 
-function TranscriptList({items,names,playTime,onPlay,onEdit,onReview,disabled}:{items:Segment[];names?:Record<string,string>;playTime:number;onPlay:(time:number)=>void;onEdit:(s:Segment)=>void;onReview:(s:Segment)=>void;disabled:boolean}){
+function TranscriptList({items,names,playTime,onPlay,onEdit,onReview,disabled,controller,restoreRequest,listIdentity}:{items:Segment[];names?:Record<string,string>;playTime:number;onPlay:(time:number)=>void;onEdit:(s:Segment)=>void;onReview:(s:Segment)=>void;disabled:boolean;controller:RefObject<TranscriptController|null>;restoreRequest:TranscriptRestore|null;listIdentity?:string}){
  const parentRef=useRef<HTMLDivElement>(null)
+ const handledRestore=useRef(0)
  const virtualizer=useVirtualizer({count:items.length,getScrollElement:()=>parentRef.current,estimateSize:()=>132,overscan:5})
- useEffect(()=>{parentRef.current?.scrollTo({top:0});virtualizer.measure()},[items.length])
- return <div className="transcript-scroll" ref={parentRef}>{!items.length?<div className="no-search-results"><Search size={27}/><strong>没有匹配的片段</strong><p>更换关键词，或切回全部片段。</p></div>:<div className="virtual-transcript" style={{height:virtualizer.getTotalSize(),position:'relative'}}>{virtualizer.getVirtualItems().map(v=>{const s=items[v.index];const active=playTime>=s.start&&playTime<s.end;return <div key={s.id} data-index={v.index} ref={virtualizer.measureElement} className="virtual-segment" style={{position:'absolute',top:0,left:0,width:'100%',transform:`translateY(${v.start}px)`}}><article className={cn('transcript-segment',active&&'is-playing')}><div className={cn('speaker-avatar',colorFor(s.speaker))}>{s.speaker.slice(1)}</div><div className="segment-body"><div className="segment-topline"><strong className={cn('speaker-name',colorFor(s.speaker))}>{speakerLabel(s.speaker,names)}</strong><button className="segment-time" onClick={()=>onPlay(s.start)} aria-label={`从 ${clock(s.start)} 回听`}><Play size={10}/>{clock(s.start,true)}<span>— {clock(s.end,true)}</span></button>{s.uncertain&&!s.reviewed&&<span className="uncertain-label"><span/>归属待核</span>}{s.reviewed&&<span className="reviewed-label"><CheckCheck size={12}/>已校对</span>}{s.edited&&!s.reviewed&&<span className="edited-label">已编辑</span>}</div>{s.state==='done'?<p className="segment-text">{s.text||<span className="pending-text">本段未识别出文字，建议回听确认。</span>}</p>:<p className="pending-text">{s.state==='ambiguous'?'上次请求结果不明，默认不会重复提交。':s.state==='failed'?'本段转写未完成，可以继续重试。':s.state==='requesting'?'正在识别这段发言…':'等待转写'}</p>}</div><div className="segment-controls"><IconButton label="编辑文字与人物" disabled={disabled||s.state!=='done'} onClick={()=>onEdit(s)}><PencilLine size={14}/></IconButton><IconButton label={s.reviewed?'取消已校对':'标记已校对'} disabled={disabled||s.state!=='done'} onClick={()=>onReview(s)}><Check size={14}/></IconButton></div></article></div>})}</div>}</div>
+ useImperativeHandle(controller,()=>({capture:()=>{
+  const top=parentRef.current?.scrollTop||0
+  const row=virtualizer.getVirtualItems().find(item=>item.end>top)
+  return {top,anchorId:row?items[row.index]?.id:undefined,inset:row?top-row.start:0}
+ }}),[items,virtualizer])
+ useLayoutEffect(()=>{
+  virtualizer.measure()
+  const request=restoreRequest&&restoreRequest.serial!==handledRestore.current?restoreRequest:null
+  if(!request){parentRef.current?.scrollTo({top:0});return}
+  handledRestore.current=request.serial
+  const position=request.position
+  const index=position?.anchorId?items.findIndex(item=>item.id===position.anchorId):-1
+  if(index<0){virtualizer.scrollToOffset(position?.top||0);return}
+  virtualizer.scrollToIndex(index,{align:'start'})
+  let secondFrame=0
+  const frame=requestAnimationFrame(()=>{
+   virtualizer.scrollToIndex(index,{align:'start'})
+   secondFrame=requestAnimationFrame(()=>{
+    const row=virtualizer.getVirtualItems().find(item=>item.index===index)
+    if(row)virtualizer.scrollToOffset(row.start+(position?.inset||0))
+   })
+  })
+  return()=>{cancelAnimationFrame(frame);cancelAnimationFrame(secondFrame)}
+ },[items.length,listIdentity,restoreRequest?.serial])
+ return <div className="transcript-scroll" data-total-segments={items.length} ref={parentRef}>{!items.length?<div className="no-search-results"><Search size={27}/><strong>没有匹配的片段</strong><p>更换关键词，或切回全部片段。</p></div>:<div className="virtual-transcript" style={{height:virtualizer.getTotalSize(),position:'relative'}}>{virtualizer.getVirtualItems().map(v=>{const s=items[v.index];const active=playTime>=s.start&&playTime<s.end;return <div key={s.id} data-index={v.index} data-segment-id={s.id} ref={virtualizer.measureElement} className="virtual-segment" style={{position:'absolute',top:0,left:0,width:'100%',transform:`translateY(${v.start}px)`}}><article className={cn('transcript-segment',active&&'is-playing')}><div className={cn('speaker-avatar',colorFor(s.speaker))}>{s.speaker.slice(1)}</div><div className="segment-body"><div className="segment-topline"><strong className={cn('speaker-name',colorFor(s.speaker))}>{speakerLabel(s.speaker,names)}</strong><button className="segment-time" onClick={()=>onPlay(s.start)} aria-label={`从 ${clock(s.start)} 回听`}><Play size={10}/>{clock(s.start,true)}<span>— {clock(s.end,true)}</span></button>{s.uncertain&&!s.reviewed&&<span className="uncertain-label"><span/>归属待核</span>}{s.reviewed&&<span className="reviewed-label"><CheckCheck size={12}/>已校对</span>}{s.edited&&!s.reviewed&&<span className="edited-label">已编辑</span>}</div>{s.state==='done'?<p className="segment-text">{s.text||<span className="pending-text">本段未识别出文字，建议回听确认。</span>}</p>:<p className="pending-text">{s.state==='ambiguous'?'上次请求结果不明，默认不会重复提交。':s.state==='failed'?'本段转写未完成，可以继续重试。':s.state==='requesting'?'正在识别这段发言…':'等待转写'}</p>}</div><div className="segment-controls"><IconButton label="编辑文字与人物" disabled={disabled||s.state!=='done'} onClick={()=>onEdit(s)}><PencilLine size={14}/></IconButton><IconButton label={s.reviewed?'取消已校对':'标记已校对'} disabled={disabled||s.state!=='done'} onClick={()=>onReview(s)}><Check size={14}/></IconButton></div></article></div>})}</div>}</div>
 }
 
 function AudioPlayer({audioRef,src,duration,title,onTime}:{audioRef:RefObject<HTMLAudioElement|null>;src:string;duration:number;title:string;onTime:(time:number)=>void}){

@@ -34,7 +34,7 @@ class MeetingEngine(
 
     init {
         jobsRoot.mkdirs()
-        settings=JSONObject().put("num_speakers",0).put("max_workers",1).put("hourly_price",0.39).put("retry_uncertain",false).put("output_root",jobsRoot.absolutePath)
+        settings=JSONObject().put("num_speakers",0).put("max_workers",1).put("hourly_price",0.39).put("retry_uncertain",false).put("api_key_prompt_seen",false).put("output_root",jobsRoot.absolutePath)
         val saved=readJson(settingsFile)
         if(saved!=null) try { updateSettings(saved,false) } catch(_:Exception) { }
         jobsRoot.listFiles()?.filter { it.isDirectory && validId(it.name) }?.sortedByDescending { it.lastModified() }?.forEach { folder ->
@@ -93,7 +93,7 @@ class MeetingEngine(
         val job=selected?.let { jobs[it] }
         val source=job?.let { j -> JSONObject().put("path",sourceFile(j).absolutePath).put("name",j.optString("source_name",j.getString("title")))
             .put("duration_seconds",j.getDouble("duration_seconds")).put("audio_url",mediaOrNull(playbackFile(j))) }
-        JSONObject().put("version","2.3.0-android.1").put("source",source?:JSONObject.NULL).put("settings",cloneJson(settings))
+        JSONObject().put("version","2.3.0-android.2").put("source",source?:JSONObject.NULL).put("settings",cloneJson(settings))
             .put("jobs",jsonArray(histories)).put("selected_job",job?.let { payload(it) }?:JSONObject.NULL).put("task",cloneJson(task)).put("logs",jsonArray(logs.toList()))
     }
     fun taskState():JSONObject = synchronized(lock) {cloneJson(task)}
@@ -351,11 +351,12 @@ class MeetingEngine(
     private fun log(message:String) {logs.addLast(JSONObject().put("time",nowIso()).put("message",message));while(logs.size>200)logs.removeFirst()}
     private fun updateSettings(value:JSONObject,persist:Boolean) {
         val candidate=cloneJson(settings)
-        val allowed=setOf("num_speakers","max_workers","hourly_price","retry_uncertain","output_root")
+        val allowed=setOf("num_speakers","max_workers","hourly_price","retry_uncertain","api_key_prompt_seen","output_root")
         require(value.keys().asSequence().all {it in allowed}) {"设置包含不支持的字段。"}
         if(value.has("num_speakers")) {val n=value.getInt("num_speakers");require(n in 0..20);candidate.put("num_speakers",n)}
         if(value.has("hourly_price")) {val price=value.getDouble("hourly_price");require(price.isFinite()&&price>0&&price<=1000);candidate.put("hourly_price",price)}
         if(value.has("retry_uncertain")) {require(value.opt("retry_uncertain") is Boolean);candidate.put("retry_uncertain",value.getBoolean("retry_uncertain"))}
+        if(value.has("api_key_prompt_seen")) {require(value.opt("api_key_prompt_seen") is Boolean);candidate.put("api_key_prompt_seen",value.getBoolean("api_key_prompt_seen"))}
         settings=candidate.put("max_workers",1).put("output_root",jobsRoot.absolutePath)
         if(persist)writeJson(settingsFile,settings)
     }

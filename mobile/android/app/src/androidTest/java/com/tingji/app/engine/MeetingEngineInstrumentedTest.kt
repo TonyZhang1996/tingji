@@ -113,6 +113,51 @@ class MeetingEngineInstrumentedTest {
         importAndAnalyze()
         assertEquals(engine!!.state().toString(),engine!!.dispatch("state",JSONObject()).toString())
     }
+    @Test fun keyPromptFlagSurvivesRestartWhileSessionCredentialStaysPrivate() {
+        assertFalse(engine!!.state().getJSONObject("settings").getBoolean("api_key_prompt_seen"))
+        val configured=engine!!.dispatch("config",JSONObject().put("api_key_prompt_seen",true))
+        assertTrue(configured.getJSONObject("settings").getBoolean("api_key_prompt_seen"))
+        importAndAnalyze();assertTrue(selected(transcribe()).getBoolean("complete"))
+        engine!!.close();engine=newEngine()
+        val restored=engine!!.state()
+        assertTrue(restored.getJSONObject("settings").getBoolean("api_key_prompt_seen"))
+        assertFalse(restored.getJSONObject("settings").has("api_key"))
+        assertFalse(restored.toString().contains(key))
+        val settings=readJson(File(testDir,"tingji/settings.json"))!!
+        assertTrue(settings.getBoolean("api_key_prompt_seen"));assertFalse(settings.has("api_key"))
+        File(testDir,"tingji").walkTopDown().filter{it.isFile}.forEach {
+            assertFalse("Session credential persisted in ${it.name}",it.readBytes().toString(Charsets.ISO_8859_1).contains(key))
+        }
+    }
+    @Test fun upgradedSettingsDefaultToUnseenAndRejectNonBooleanFlagsOrCredentialFields() {
+        engine!!.close()
+        val file=File(testDir,"tingji/settings.json")
+        writeJson(file,JSONObject().put("num_speakers",2).put("retry_uncertain",false))
+        engine=newEngine()
+        assertEquals(2,engine!!.state().getJSONObject("settings").getInt("num_speakers"))
+        assertFalse(engine!!.state().getJSONObject("settings").getBoolean("api_key_prompt_seen"))
+        engine!!.dispatch("config",JSONObject().put("api_key_prompt_seen",true))
+        val saved=file.readText()
+        for(value in listOf<Any>("true",1,JSONObject.NULL,JSONObject(),JSONArray())) {
+            try {
+                engine!!.dispatch("config",JSONObject().put("api_key_prompt_seen",value))
+                fail("The prompt flag must be a JSON boolean")
+            } catch(_:IllegalArgumentException){}
+            assertEquals(saved,file.readText())
+        }
+        for(field in listOf("api_key","apiKey","deepseek_api_key")) {
+            try {
+                engine!!.dispatch("config",JSONObject().put("api_key_prompt_seen",false).put(field,key))
+                fail("Credentials must never be accepted as persistent settings")
+            } catch(_:IllegalArgumentException){}
+            assertEquals(saved,file.readText())
+            assertTrue(engine!!.state().getJSONObject("settings").getBoolean("api_key_prompt_seen"))
+            assertFalse(engine!!.state().toString().contains(key))
+        }
+        engine!!.close();engine=newEngine()
+        assertTrue(engine!!.state().getJSONObject("settings").getBoolean("api_key_prompt_seen"))
+        assertFalse(file.readText().contains(key));assertEquals(0,asrCalls.get())
+    }
     @Test fun deletingHistoryOnlyRemovesThatJobsShareSnapshots() {
         val firstId=importAndAnalyze()
         val secondSource=File(testDir,"imports/second.wav");wav(secondSource,6)
