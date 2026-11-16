@@ -25,6 +25,12 @@ FORBIDDEN = {"settings.json", "analysis.json", "checkpoint.json", "speaker_names
 MEDIA = {".wav", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".flac", ".wma", ".amr", ".mp4", ".mkv", ".mov", ".avi", ".webm"}
 CREDENTIAL = re.compile(rb"(?<![\w-])(?:sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,})(?![\w-])")
 SENSITIVE_ENV = re.compile(r"api.?key|token|secret|password|credential", re.I)
+# scikit-learn 1.5.2's public CSS uses long sk-* class names. Pin the exact
+# upstream file rather than weakening credential detection for other inputs.
+REVIEWED_PUBLIC_DATA = {
+    "_internal/sklearn/utils/_estimator_html_repr.css":
+        "a87702b79c5ab9bba6f2516312855939d7d9e879925d5f0e2a0d2ea746c7a1df",
+}
 
 
 def run(command, *, env=None):
@@ -108,11 +114,14 @@ def audit_tree(root: Path, *, secret_values=()):
             raise ValueError(f"Private or media path in build: {relative}")
         needles = [value.encode("utf-8") for value in secret_values if len(value) >= 12]
         needles += [value.encode("utf-16le") for value in secret_values if len(value) >= 12]
+        public_hash = REVIEWED_PUBLIC_DATA.get(relative)
+        reviewed_public_data = bool(public_hash and public_hash == digest(file))
         tail = b""
         with file.open("rb") as stream:
             while chunk := stream.read(1024 * 1024):
                 data = tail + chunk
-                if CREDENTIAL.search(data) or any(needle in data for needle in needles):
+                if ((not reviewed_public_data and CREDENTIAL.search(data))
+                        or any(needle in data for needle in needles)):
                     raise ValueError(f"Credential-shaped data in build: {relative}")
                 tail = data[-4096:]
         rows.append({"path": relative, "bytes": file.stat().st_size, "sha256": digest(file)})

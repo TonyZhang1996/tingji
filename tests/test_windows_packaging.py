@@ -82,6 +82,22 @@ class WindowsPackagingTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     build.audit_tree(root)
 
+    def test_public_css_exception_is_hash_pinned_and_never_hides_actual_secrets(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            relative = "_internal/sklearn/utils/_estimator_html_repr.css"
+            css = root / relative
+            css.parent.mkdir(parents=True)
+            public_selector = "sk-" + "example-class-" * 3
+            css.write_text("." + public_selector + " {}", encoding="utf-8")
+            with patch.dict(build.REVIEWED_PUBLIC_DATA, {relative: digest(css)}):
+                self.assertEqual(len(build.audit_tree(root)), 1)
+                with self.assertRaises(ValueError):
+                    build.audit_tree(root, secret_values=(public_selector,))
+                css.write_text("sk-" + "X" * 32, encoding="utf-8")
+                with self.assertRaises(ValueError):
+                    build.audit_tree(root)
+
 
 if __name__ == "__main__":
     unittest.main()
