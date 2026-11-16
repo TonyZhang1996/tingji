@@ -93,7 +93,7 @@ class MeetingEngine(
         val job=selected?.let { jobs[it] }
         val source=job?.let { j -> JSONObject().put("path",sourceFile(j).absolutePath).put("name",j.optString("source_name",j.getString("title")))
             .put("duration_seconds",j.getDouble("duration_seconds")).put("audio_url",mediaOrNull(playbackFile(j))) }
-        JSONObject().put("version","2.3.0-android.2").put("source",source?:JSONObject.NULL).put("settings",cloneJson(settings))
+        JSONObject().put("version","2.3.0-android.3").put("source",source?:JSONObject.NULL).put("settings",cloneJson(settings))
             .put("jobs",jsonArray(histories)).put("selected_job",job?.let { payload(it) }?:JSONObject.NULL).put("task",cloneJson(task)).put("logs",jsonArray(logs.toList()))
     }
     fun taskState():JSONObject = synchronized(lock) {cloneJson(task)}
@@ -306,7 +306,10 @@ class MeetingEngine(
         val summary=result.getJSONObject("ai_summary")
         summary.optJSONObject("report")?.let {report->summary.put("stale",report.optString("input_fingerprint")!=MeetingSummary.inputFingerprint(job))}
         val exports=JSONObject();for(format in listOf("txt","md","json","csv","srt"))exports.put(format,JSONObject().put("available",File(folder(job),exportName(format)).isFile))
-        result.put("exports",exports).put("warnings",JSONArray().put("自动人物归属和数字需回听确认；重叠讲话暂不单独分离。"))
+        val warnings=JSONArray().put("自动人物归属和数字需回听确认；重叠讲话暂不单独分离。")
+        if(job.getJSONArray("segments").length()>0 && !normalizedFile(job).isFile)
+            warnings.put("用于分段的本地音频缓存已丢失，已暂停片段回听，避免与原始录音的时间轴不一致。录音和现有文字仍保留，不会自动重新转写。")
+        result.put("exports",exports).put("warnings",warnings)
         return result
     }
 
@@ -320,7 +323,12 @@ class MeetingEngine(
     }
     private fun sourceFile(job:JSONObject)=File(folder(job),job.getString("source_file")).also {require(within(folder(job),it))}
     private fun normalizedFile(job:JSONObject)=File(folder(job),"recording-16k.wav")
-    private fun playbackFile(job:JSONObject)=normalizedFile(job).takeIf{it.isFile}?:sourceFile(job)
+    // Segment times belong to the decoded PCM timeline. Never silently apply
+    // them to a different compressed-source timeline if that cache is missing.
+    private fun playbackFile(job:JSONObject):File {
+        val normalized=normalizedFile(job)
+        return if(job.getJSONArray("segments").length()>0 || normalized.isFile)normalized else sourceFile(job)
+    }
     private fun mediaOrNull(file:File):Any=if(file.isFile)mediaUrl(file) else JSONObject.NULL
     private fun save(job:JSONObject) {job.put("updated_at",nowIso());writeJson(File(folder(job),"job.json"),job)}
     private fun validId(id:String)=Regex("[a-f0-9]{32}").matches(id)

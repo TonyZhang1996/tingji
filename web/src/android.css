@@ -231,3 +231,49 @@ html.android-app {
 .android-app .android-welcome-note p { margin: 0; font-size: 13px; line-height: 1.8; color: #4d596b; }
 .android-app .android-welcome-dialog>[data-slot=dialog-footer] { flex-shrink: 0; padding: 12px 20px; border-top: 1px solid var(--border); }
 .android-app .android-welcome-dialog>[data-slot=dialog-footer]>button { flex: 1; }
+
+/* Android uses one real document scroller, including the tools above it. */
+.android-app .android-content-scroll {
+ flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden;
+ overscroll-behavior: contain; overflow-anchor: none; position: relative;
+}
+.android-app .android-content-scroll .editor-layout,
+.android-app .android-content-scroll .editor-pane { display: block; flex: none; overflow: visible; }
+.android-app .android-content-scroll .transcript-scroll { height: auto; flex: none; overflow: visible; }
+.android-app .android-content-scroll .summary-workspace { display: block; flex: none; overflow: visible; }
+.android-app .android-content-scroll .summary-scroll { height: auto; max-height: none; overflow: visible; }
+.android-app .android-empty-view .android-content-scroll .editor-layout,
+.android-app .android-empty-view .android-content-scroll .editor-pane,
+.android-app .android-empty-view .android-content-scroll .empty-workspace { height: 100%; }
+.android-app .android-people-view .android-content-scroll { overflow: hidden; }
+.android-app .android-people-view .android-content-scroll .editor-layout { height: 100%; display: flex; overflow: hidden; }
+.android-app .topbar-actions .android-fullscreen-action {
+ width: auto; min-width: 112px; height: 48px; padding: 0 12px; gap: 7px;
+ background: #4655c7; color: #fff; border: 1px solid #4655c7; font-size: 14px; font-weight: 600;
+}
+.android-app .topbar-actions .android-tools-jump { width: auto; min-width: 76px; height: 48px; margin-left: 8px; padding: 0 8px; gap: 4px; font-size: 14px; }
+.android-app .android-content-scrolled .workspace-label,
+.android-app .android-secondary-action { display: none; }
+.android-app .android-reading-mode .summary-actions,
+.android-app .android-reading-mode .summary-document-header { display: none; }
+.android-app .android-reading-mode .summary-section p,
+.android-app .android-reading-mode .summary-list li { font-size: 17px; line-height: 1.9; }
+
+/* The final chevron controls only this player; speed has its own hit target. */
+.android-app .player-topline { grid-template-columns: 48px minmax(0,1fr) 52px 48px; gap: 8px; }
+.android-app .player-options .speed-select { width: 52px; min-width: 52px; padding: 0 4px; justify-content: center; font-size: 14px; }
+.android-app .speed-select>svg { display: none; }
+.android-app .player-collapse { width: 48px; min-width: 48px; height: 48px; padding: 0; }
+.android-app .player-compact-info { display: none; min-width: 0; }
+.android-app .audio-player.is-collapsed { height: 56px; flex-basis: 56px; padding: 4px 12px; }
+.android-app .audio-player.is-collapsed .player-topline { grid-template-columns: 48px minmax(0,1fr) 48px; }
+.android-app .audio-player.is-collapsed .player-track,
+.android-app .audio-player.is-collapsed .player-options { display: none; }
+.android-app .audio-player.is-collapsed .player-compact-info { display: block; }
+.android-app .player-compact-info strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.android-app .player-compact-info time { display: block; margin-top: 2px; font-size: 12px; color: #69717e; }
+.android-app .playback-warning { display: flex; gap: 10px; align-items: flex-start; padding: 12px 16px; background: #fff6e8; color: #785219; border-bottom: 1px solid #eedbbb; }
+.android-app .playback-warning svg { flex-shrink: 0; margin-top: 3px; }
+.android-app .playback-warning p,.android-app .edit-playback-warning { margin: 0; font-size: 13px; line-height: 1.8; }
+.android-app .edit-playback-warning { color: #785219; }
+.android-app .segment-time:disabled { opacity: .5; cursor: default; }

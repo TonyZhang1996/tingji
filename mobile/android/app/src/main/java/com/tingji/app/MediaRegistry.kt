@@ -40,9 +40,18 @@ class MediaRegistry(context: Context) {
             "X-Content-Type-Options" to "nosniff", "Content-Length" to range.length.toString())
         if (partial) headers["Content-Range"] = "bytes ${range.start}-${range.end}/$size"
         val stream = FileInputStream(canonical)
-        stream.channel.position(range.start)
+        // Chromium's Android InputStreamReader validates Range against
+        // available(), then skips its start BEFORE publishing our headers.
+        // Give it the full prefix so that the range is not applied twice.
+        // For >2 GiB report unknown size instead of a saturated Java Int.
+        val unknownSize = range.end >= Int.MAX_VALUE.toLong()
+        // A suffix cannot be resolved by Chromium when available() is unknown.
+        // It has no positive start to skip, so position that special case here.
+        val suffixWithUnknownSize = unknownSize && rangeHeader?.trim()?.startsWith("bytes=-") == true
+        val initialOffset = if (suffixWithUnknownSize) range.start else 0L
+        if (initialOffset > 0) stream.channel.position(initialOffset)
         return WebResourceResponse(mime(canonical.extension), null, if (partial) 206 else 200,
-            if (partial) "Partial Content" else "OK", headers, LimitedStream(stream, range.length))
+            if (partial) "Partial Content" else "OK", headers, LimitedStream(stream, range.end + 1 - initialOffset, unknownSize))
     }
 
     private fun error(status: Int, extra: Map<String, String> = emptyMap()) =
@@ -92,7 +101,16 @@ internal data class ByteRange(val start: Long, val end: Long) {
     }
 }
 
-private class LimitedStream(source: InputStream, private var remaining: Long) : FilterInputStream(source) {
+private class LimitedStream(source: InputStream, private var remaining: Long, private val unknownSize: Boolean = false) : FilterInputStream(source) {
+    override fun available(): Int = if (unknownSize) 0 else minOf(remaining, `in`.available().toLong()).toInt()
+    override fun skip(count: Long): Long {
+        if (count <= 0 || remaining <= 0) return 0
+        // Chromium's Java skip result is narrowed to a signed Int in JNI.
+        // Its reader already loops until the full Long offset is reached.
+        val skipped = `in`.skip(minOf(count, remaining, Int.MAX_VALUE.toLong()))
+        remaining -= skipped
+        return skipped
+    }
     override fun read(): Int {
         if (remaining <= 0) return -1
         val value = super.read()

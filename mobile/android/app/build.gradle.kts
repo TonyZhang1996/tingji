@@ -12,8 +12,8 @@ android {
         applicationId = "com.tingji.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 23002
-        versionName = "2.3.0-android.2"
+        versionCode = 23003
+        versionName = "2.3.0-android.3"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
             abiFilters += providers.gradleProperty("tingjiAbis").orElse("arm64-v8a,x86_64").get()

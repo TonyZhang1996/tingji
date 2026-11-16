@@ -4,19 +4,21 @@
 
 ## 简体中文
 
-听记 Android 的当前预发布版本为 **2.3.0-android.2**。手机导入已有会议录音，在本机分析人物，再使用自己的 DeepSeek API Key 转写和总结。手机可独立处理任务，不依赖电脑保持开机，也没有听记中转服务器。
+听记 Android 的当前预发布版本为 **2.3.0-android.3**。手机导入已有会议录音，在本机分析人物，再使用自己的 DeepSeek API Key 转写和总结。手机可独立处理任务，不依赖电脑保持开机，也没有听记中转服务器。
 
 当前主要适配目标为 **vivo X300 等 ARM64 安卓手机**。工程最低安卓版本为 Android 8.0；这不代表所有机型均已验收。尚未完成 vivo X300 真机测试，处理速度、发热、耗电和真实会议人物区分效果需在目标手机上验证。预发布版不应作为重要会议内容的唯一备份。
 
 ### 安装和开始使用
 
-1. 用手机[下载 Android APK](https://github.com/TonyZhang1996/tingji/releases/download/v2.3.0-android.2/Tingji-2.3.0-android.2-arm64-v8a.apk)（约 60 MB），或查看 [Android 发布说明](https://github.com/TonyZhang1996/tingji/releases/tag/v2.3.0-android.2)。Windows 安装包不能安装到安卓。
+1. 用手机[下载 Android APK](https://github.com/TonyZhang1996/tingji/releases/download/v2.3.0-android.3/Tingji-2.3.0-android.3-arm64-v8a.apk)（约 60 MB），或查看 [Android 发布说明](https://github.com/TonyZhang1996/tingji/releases/tag/v2.3.0-android.3)。Windows 安装包不能安装到安卓。
 2. 使用安卓系统安装程序安装 APK，打开听记。已有版本请直接覆盖安装，保留应用内任务；不要先卸载。人物模型随安装包提供，不需要安装 Python、FFmpeg 或配置模型环境。
 3. 点击“选择本地录音”，通过系统文件选择器导入 MP3、M4A、WAV 等系统可解码的音频。也可从支持系统分享的应用将音频分享给听记。
 4. 知道实际发言人数时填写人数；不确定时保留自动判断。先“分析人物”，在“人物”页试听样例并填写姓名。
 5. 首次打开会引导填写自己的 DeepSeek API Key，也可选择“稍后填写”。Key 仅留在当前应用会话内存中；以后重新打开应用时，可在设置中重新填写，再点击“开始转写”。成功片段会逐段保存，转写和总结费用由自己的 DeepSeek 账户承担。
-6. 在“文字”页点击“全屏阅读”，收起上下工具区，滚动阅读全部片段；点击退出按钮或系统返回键即可回到原布局。回听并校对后，再到“总结”页生成总体、逐人物发言总结和末尾待办事项。
+6. “文字”和“总结”页均可直接上滑，让任务信息和操作区滚出屏幕；顶部有醒目的“全屏阅读”入口，点击后使用更大的正文区域，退出按钮或系统返回键可恢复布局和位置。点击“显示工具栏”可回到顶部操作区。
 7. 通过“导出文字”或总结页的“导出分享”保存结果，也可以交给系统分享面板中的其它应用。
+
+播放器右侧的箭头用于收起或展开播放栏；倍速通过独立的“1×”按钮选择。点片段时间会等待跳转完成再播放，并在该片段末尾暂停；点播放器的完整播放或手动拖动进度，可继续播放整条录音。
 
 界面为中文。底部的“任务、文字、人物、总结”可切换主要内容；手机系统返回键会先关闭当前弹窗或面板。
 
@@ -77,7 +79,7 @@ py -3.11 mobile/scripts/audit_apk.py 'D:\tingji-release\Tingji.apk' --sdk 'D:\To
 
 ## English
 
-The current Android prerelease is **2.3.0-android.2**. Import a meeting recording, analyze speakers locally, and use **your own DeepSeek API key** for transcription and summaries. The phone processes tasks independently; a running desktop computer or a Tingji relay server is not required.
+The current Android prerelease is **2.3.0-android.3**. Import a meeting recording, analyze speakers locally, and use **your own DeepSeek API key** for transcription and summaries. The phone processes tasks independently; a running desktop computer or a Tingji relay server is not required.
 
 The primary target is **ARM64 Android phones such as the vivo X300**. The project has a minimum API level corresponding to Android 8.0, which does not establish compatibility with every device. It has not yet been validated on a physical vivo X300. Processing time, thermal behavior, battery use and real-meeting diarization accuracy need device testing. The interface is in Chinese.
 
@@ -90,6 +92,8 @@ Install an update over the existing app to retain tasks; do not uninstall first.
 Bottom navigation switches between tasks, transcript, speakers and summary. Android Back closes the current dialog or panel first.
 
 On the transcript page, “全屏阅读” expands the existing scrollable segment list and hides the surrounding controls. Use the exit button or Android Back to return. The onboarding preference stores only a boolean that the prompt was completed or skipped, never the API key.
+
+Both transcript and summary pages share one continuous content scroll area so the task information and tools move out of view when scrolling down. The visible full-screen action expands either view; “显示工具栏” returns to the tools. The player's separate arrow collapses or expands it, while the rate control remains independent. Segment previews wait for loading/seeking and pause at the selected segment's end; manual full playback or seeking clears that segment limit.
 
 ### Long recordings
 

@@ -52,11 +52,11 @@ The default installation folder is `%LOCALAPPDATA%\Programs\Tingji`. Tasks, audi
 
 ### Android prerelease
 
-The current Android prerelease is **2.3.0-android.2**, targeting ARM64 phones such as the vivo X300. Import an existing recording through the system picker or share menu, analyze speakers locally, then call DeepSeek directly with your own API key. Models are bundled in the APK; no Python or manual model setup is needed. The interface is in Chinese.
+The current Android prerelease is **2.3.0-android.3**, targeting ARM64 phones such as the vivo X300. Import an existing recording through the system picker or share menu, analyze speakers locally, then call DeepSeek directly with your own API key. Models are bundled in the APK; no Python or manual model setup is needed. The interface is in Chinese.
 
-Expand the transcript with “全屏阅读” to read all segments, then exit to restore the normal layout. First-use onboarding accepts your API key or lets you skip. Install updates over the existing app to retain tasks; do not uninstall first.
+Use the prominent “全屏阅读” action in the transcript or summary. Scrolling naturally moves task information and tools out of view; the player has an independent collapse control. Segment previews wait for seeking and stop at the selected end. First-use onboarding accepts your API key or lets you skip. Install updates over the existing app to retain tasks; do not uninstall first.
 
-Download the [Android APK](https://github.com/TonyZhang1996/tingji/releases/download/v2.3.0-android.2/Tingji-2.3.0-android.2-arm64-v8a.apk) (about 60 MB, ARM64 devices running Android 8.0 or later). Physical vivo X300 validation is still pending. Processing time, thermals, battery use and recognition accuracy need device testing. See the [release notes](https://github.com/TonyZhang1996/tingji/releases/tag/v2.3.0-android.2) for verified results and the [Android guide](mobile/README.md#english) for use and privacy details.
+Download the [Android APK](https://github.com/TonyZhang1996/tingji/releases/download/v2.3.0-android.3/Tingji-2.3.0-android.3-arm64-v8a.apk) (about 60 MB, ARM64 devices running Android 8.0 or later). Physical vivo X300 validation is still pending. Processing time, thermals, battery use and recognition accuracy need device testing. See the [release notes](https://github.com/TonyZhang1996/tingji/releases/tag/v2.3.0-android.3) for verified results and the [Android guide](mobile/README.md#english) for use and privacy details.
 
 **Uninstalling Android deletes app-private data.** Keep separate copies of source recordings and export important text results first. The Windows installer continues to preserve its local data on uninstall.
 

@@ -5,6 +5,7 @@ import android.content.ContextWrapper
 import android.util.AtomicFile
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.tingji.app.MediaRegistry
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.After
@@ -81,9 +82,14 @@ class MeetingEngineInstrumentedTest {
                 .put("content",JSONArray().put(JSONObject().put("type","output_text").put("text",content.toString())))))
         return 200 to response.toString().toByteArray()
     }
-    private fun importAndAnalyze():String {
+    private fun importAndAnalyze(marked:Boolean=false):String {
         val imports=File(testDir,"imports");imports.mkdirs();val wav=File(imports,"fixture.wav")
         wav(wav,6)
+        if(marked)RandomAccessFile(wav,"rw").use {input->
+            val data=ByteBuffer.allocate(6*32000).order(ByteOrder.LITTLE_ENDIAN)
+            repeat(6*16000){frame->data.putShort((1000*(frame/16000+1)+frame%97).toShort())}
+            input.seek(44);input.write(data.array())
+        }
         val state=engine!!.acceptAudio(wav,"合成测试会议.wav");val id=state.getJSONObject("selected_job").getString("id")
         engine!!.dispatch("config",JSONObject().put("num_speakers",2));engine!!.dispatch("analyze",JSONObject());idle()
         assertEquals(2,engine!!.state().getJSONObject("selected_job").getInt("speaker_count"))
@@ -112,6 +118,99 @@ class MeetingEngineInstrumentedTest {
         assertEquals(engine!!.state().toString(),engine!!.dispatch("state",JSONObject()).toString())
         importAndAnalyze()
         assertEquals(engine!!.state().toString(),engine!!.dispatch("state",JSONObject()).toString())
+    }
+    @Test fun rangeResponsesMatchTheExactPcmBytesUploadedForEachSegment() {
+        val id=importAndAnalyze(true);transcribe()
+        val normalized=File(testDir,"tingji/jobs/$id/recording-16k.wav")
+        val info=AudioTools.wavInfo(normalized)
+        val registry=MediaRegistry(context);val mediaId=registry.url(normalized).substringAfterLast('/')
+        val bodies=synchronized(requests){requests.filter{it.first.endsWith("/asr")}.map{it.second}}
+        val segments=selected(engine!!.state()).getJSONArray("segments").objects()
+        assertEquals(segments.size,bodies.size)
+        segments.forEachIndexed {index,segment->
+            val first=(segment.getDouble("start")*16000).toLong()
+            val last=(segment.getDouble("end")*16000).toLong()
+            val start=info.offset+first*2;val end=info.offset+last*2-1
+            val response=registry.response(mediaId,"bytes=$start-$end")
+            assertEquals(206,response.statusCode)
+            assertEquals("bytes $start-$end/${normalized.length()}",response.responseHeaders["Content-Range"])
+            // Model Chromium InputStreamReader: validate available(), skip the
+            // requested start once, and only then read the response body.
+            val served=response.data.use {
+                assertTrue(it.available().toLong()>start)
+                assertEquals(start,it.skip(start))
+                assertEquals((end-start+1).toInt(),it.available())
+                it.readBytes()
+            }
+            assertEquals((last-first)*2,served.size.toLong())
+            val multipart=bodies[index]
+            val riff=(0..multipart.size-4).first {offset->multipart[offset]=='R'.code.toByte() && multipart[offset+1]=='I'.code.toByte() && multipart[offset+2]=='F'.code.toByte() && multipart[offset+3]=='F'.code.toByte()}
+            assertArrayEquals(multipart.copyOfRange(riff+44,riff+44+served.size),served)
+            assertEquals((1000*(first.toInt()/16000+1)+first.toInt()%97).toShort(),ByteBuffer.wrap(served).order(ByteOrder.LITTLE_ENDIAN).short)
+        }
+        val response=registry.response(mediaId,"bytes=44-107")
+        response.data.use {stream->
+            assertEquals(108,stream.available());assertEquals(44L,stream.skip(44))
+            assertEquals(64,stream.available());assertEquals(7,stream.read(ByteArray(7)))
+            assertEquals(9L,stream.skip(9));assertEquals(48,stream.available())
+            assertEquals(48L,stream.skip(Long.MAX_VALUE));assertEquals(0,stream.available())
+            assertEquals(0L,stream.skip(-1));assertEquals(-1,stream.read());assertEquals(-1,stream.read(ByteArray(10)))
+        }
+        val suffix=registry.response(mediaId,"bytes=-11")
+        suffix.data.use {stream->
+            assertEquals(normalized.length().toInt(),stream.available())
+            assertEquals(normalized.length()-11,stream.skip(normalized.length()-11))
+            assertArrayEquals(normalized.readBytes().takeLast(11).toByteArray(),stream.readBytes())
+        }
+    }
+    @Test fun webViewRangeReaderHandlesLatePositionsAndUnknownSizesBeyondTwoGiB() {
+        fun skipLikeChromium(stream:java.io.InputStream,count:Long) {
+            var left=count;var calls=0
+            while(left>0) {
+                val skipped=stream.skip(left)
+                assertTrue(skipped in 1..minOf(left,Int.MAX_VALUE.toLong()))
+                left-=skipped;calls++
+            }
+            assertEquals(2,calls)
+        }
+        val file=File(testDir,"sparse-long-wave.bin")
+        val size=Int.MAX_VALUE.toLong()+65536
+        RandomAccessFile(file,"rw").use {it.setLength(size);it.seek(size-16);it.write(ByteArray(16){index->(index+1).toByte()})}
+        assertTrue("The long-range fixture must remain sparse",android.system.Os.stat(file.absolutePath).st_blocks*512<1024*1024)
+        val registry=MediaRegistry(context);val id=registry.url(file).substringAfterLast('/')
+        registry.response(id,"bytes=${size-16}-").data.use {stream->
+            assertEquals(0,stream.available()) // Chromium treats zero as unknown, not Int.MAX_VALUE.
+            skipLikeChromium(stream,size-16)
+            assertArrayEquals(ByteArray(16){(it+1).toByte()},stream.readBytes())
+            assertEquals(-1,stream.read())
+        }
+        // Chromium cannot compute a suffix's positive start without an Int
+        // size. The native adapter handles only that unknown-size suffix.
+        registry.response(id,"bytes=-16").data.use {stream->
+            assertEquals(0,stream.available())
+            assertArrayEquals(ByteArray(16){(it+1).toByte()},stream.readBytes())
+        }
+        registry.response(id,"bytes=${size-16}-${size-9}").data.use {stream->
+            assertEquals(0,stream.available());skipLikeChromium(stream,size-16)
+            assertArrayEquals(ByteArray(8){(it+1).toByte()},stream.readBytes())
+        }
+    }
+    @Test fun missingNormalizedAudioDoesNotSilentlyReplayAnotherTimelineOrRetranscribe() {
+        val id=importAndAnalyze();assertTrue(selected(transcribe()).getBoolean("complete"))
+        val folder=File(testDir,"tingji/jobs/$id")
+        val normalized=File(folder,"recording-16k.wav");val savedAudio=normalized.readBytes()
+        val jobFile=File(folder,"job.json");val savedJob=jobFile.readText()
+        val oldText=selected(engine!!.state()).getJSONArray("segments").toString()
+        assertTrue(normalized.delete())
+        val state=engine!!.state();val job=selected(state)
+        assertTrue(job.isNull("audio_url"));assertTrue(state.getJSONObject("source").isNull("audio_url"))
+        assertTrue(job.getJSONArray("warnings").toString().contains("不会自动重新转写"))
+        assertEquals(oldText,job.getJSONArray("segments").toString())
+        assertEquals(savedJob,jobFile.readText());assertEquals(3,asrCalls.get())
+        assertTrue(File(folder,"source.wav").isFile)
+        normalized.writeBytes(savedAudio)
+        assertFalse(selected(engine!!.state()).isNull("audio_url"))
+        assertEquals(savedJob,jobFile.readText());assertEquals(3,asrCalls.get())
     }
     @Test fun keyPromptFlagSurvivesRestartWhileSessionCredentialStaysPrivate() {
         assertFalse(engine!!.state().getJSONObject("settings").getBoolean("api_key_prompt_seen"))

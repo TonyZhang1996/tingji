@@ -52,11 +52,11 @@
 
 ### Android 预发布版
 
-Android 版本为 **2.3.0-android.2**，以 vivo X300 等 ARM64 安卓手机为主要适配目标。通过系统文件选择器或分享入口导入已有录音，在手机本地分析人物，再直接调用使用者自己的 DeepSeek API 转写和总结。模型随 APK 提供，无需配置 Python 或模型环境。
+Android 版本为 **2.3.0-android.3**，以 vivo X300 等 ARM64 安卓手机为主要适配目标。通过系统文件选择器或分享入口导入已有录音，在手机本地分析人物，再直接调用使用者自己的 DeepSeek API 转写和总结。模型随 APK 提供，无需配置 Python 或模型环境。
 
-文字页可“全屏阅读”全部片段，退出后恢复原布局；首次使用会弹窗引导填写 API Key，也可稍后填写。更新请直接覆盖安装，保留已有任务，不要先卸载。
+文字和总结页都支持醒目的“全屏阅读”，上滑时任务信息和操作区自然滚走；播放器可独立收起，片段回听在定位完成后播放并于本段末尾停止。首次使用会弹窗引导填写 API Key，也可稍后填写。更新请直接覆盖安装，保留已有任务，不要先卸载。
 
-手机可直接[下载 Android APK](https://github.com/TonyZhang1996/tingji/releases/download/v2.3.0-android.2/Tingji-2.3.0-android.2-arm64-v8a.apk)（约 60 MB，Android 8.0 以上 ARM64 设备）。这是 Android 预发布版，尚未在 vivo X300 真机上完成验收；处理速度、发热、耗电和识别准确率需以实际测试为准。[发布说明](https://github.com/TonyZhang1996/tingji/releases/tag/v2.3.0-android.2)列出已验证结果，使用说明和隐私边界见 [Android 说明](mobile/README.md)。
+手机可直接[下载 Android APK](https://github.com/TonyZhang1996/tingji/releases/download/v2.3.0-android.3/Tingji-2.3.0-android.3-arm64-v8a.apk)（约 60 MB，Android 8.0 以上 ARM64 设备）。这是 Android 预发布版，尚未在 vivo X300 真机上完成验收；处理速度、发热、耗电和识别准确率需以实际测试为准。[发布说明](https://github.com/TonyZhang1996/tingji/releases/tag/v2.3.0-android.3)列出已验证结果，使用说明和隐私边界见 [Android 说明](mobile/README.md)。
 
 **安卓卸载会删除应用私有数据**，请先另外备份原录音，并导出需要保留的文字结果。Windows 版卸载保留本地数据的行为保持不变。
 

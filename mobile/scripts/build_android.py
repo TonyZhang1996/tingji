@@ -142,7 +142,7 @@ def main():
     apk = stage / f"app/build/outputs/apk/{args.variant}/app-{args.variant}{'-unsigned' if args.variant == 'release' else ''}.apk"
     if not apk.is_file(): raise SystemExit("Gradle did not produce the expected APK.")
     out = work / "dist"; out.mkdir(exist_ok=True)
-    output = out / f"Tingji-2.3.0-android.2-{args.variant}{'-unsigned' if args.variant == 'release' else ''}.apk"
+    output = out / f"Tingji-2.3.0-android.3-{args.variant}{'-unsigned' if args.variant == 'release' else ''}.apk"
     shutil.copyfile(apk, output)
     shutil.copyfile(stage / "build-inputs.json", out / (output.stem + "-build-inputs.json"))
     (out / (output.name + ".sha256")).write_text(digest(output) + "  " + output.name + "\n", encoding="ascii")

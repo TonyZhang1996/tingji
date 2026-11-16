@@ -28,9 +28,15 @@ class EnginePureTests {
         try {
             val source=File(dir,"long.wav");wav(source,7200)
             assertEquals(7200.0,AudioTools.wavInfo(source).duration,.0001)
+            val markerFrame=(3600.375*16000).toLong()
+            RandomAccessFile(source,"rw").use {it.seek(44+markerFrame*2);it.writeShort(java.lang.Short.reverseBytes(23456).toInt())}
             val piece=File(dir,"piece.wav");AudioTools.slice(source,piece,3600.25,3710.25){false}
             assertEquals(110.0,AudioTools.wavInfo(piece).duration,.0001)
             assertEquals(44+110*32000,piece.length().toInt())
+            RandomAccessFile(piece,"r").use {
+                it.seek(44+2000*2);assertEquals(23456,java.lang.Short.reverseBytes(it.readShort()).toInt())
+                assertEquals(0,it.readShort().toInt())
+            }
             try {AudioTools.slice(source,piece,0.0,120.0){false};fail("API boundary must be enforced") } catch(_:IllegalArgumentException){}
         } finally {dir.deleteRecursively()}
     }
@@ -68,6 +74,33 @@ class EnginePureTests {
             }
             assertTrue(normalizedRms(1000)>.30)
             assertTrue(normalizedRms(12000)<.02)
+        } finally {dir.deleteRecursively()}
+    }
+    @Test fun resamplingKeepsDistantTimeMarkersInTheirOriginalPositions() {
+        val dir=Files.createTempDirectory("tingji-resample-timeline-test").toFile()
+        try {
+            val source=File(dir,"markers-44100.wav");wav(source,31,44100)
+            val times=listOf(.5,13.75,29.8)
+            RandomAccessFile(source,"rw").use {input->
+                for(time in times) {
+                    input.seek(44+(time*44100).toLong()*2)
+                    repeat(441){input.writeShort(java.lang.Short.reverseBytes(16000).toInt())}
+                }
+            }
+            val normalized=File(dir,"normalized.wav");AudioTools.normalize(source,normalized,{false}){}
+            val info=AudioTools.wavInfo(normalized)
+            assertEquals(31.0,info.duration,1.0/16000)
+            RandomAccessFile(normalized,"r").use {input->
+                for(time in times) {
+                    val frame=(time*16000).toLong()
+                    input.seek(info.offset+(frame+40)*2)
+                    assertTrue(java.lang.Short.reverseBytes(input.readShort()).toInt()>15000)
+                    input.seek(info.offset+(frame-40)*2)
+                    assertEquals(0,input.readShort().toInt())
+                    input.seek(info.offset+(frame+200)*2)
+                    assertEquals(0,input.readShort().toInt())
+                }
+            }
         } finally {dir.deleteRecursively()}
     }
     @Test fun completeFileFingerprintDetectsMiddleChanges() {

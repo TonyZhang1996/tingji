@@ -72,7 +72,7 @@ open class DeepSeekClient(
         c.connectTimeout=30000; c.readTimeout=timeout; c.requestMethod="POST"; c.instanceFollowRedirects=false
         c.useCaches=false;c.setRequestProperty("Cache-Control","no-store")
         c.doOutput=true; c.setRequestProperty("Authorization","Bearer $apiKey"); c.setRequestProperty("Content-Type",contentType)
-        c.setRequestProperty("Accept","application/json"); c.setRequestProperty("User-Agent","TingjiAndroid/2.3.0-android.2")
+        c.setRequestProperty("Accept","application/json"); c.setRequestProperty("User-Agent","TingjiAndroid/2.3.0-android.3")
         c.setFixedLengthStreamingMode(length)
         try {
             // Once transmission starts, cancellation waits for a response so a
