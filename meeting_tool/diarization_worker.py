@@ -1,7 +1,8 @@
 """Offline, bounded-memory Silero VAD + CAM++ global speaker clustering.
 
-This process deliberately runs in the user's existing model environment. It does
-not install dependencies, download models, transcribe speech, or access an API.
+Windows installations use bundled models and dependencies; source checkouts can
+reuse an existing environment. This process never downloads models, transcribes
+speech, or accesses an API.
 """
 from __future__ import annotations
 
@@ -117,7 +118,7 @@ def make_turns(regions, windows, labels, uncertain):
 
 
 def detect_speech(wav: Path, frames: int, checkpoint: Path, input_signature):
-    import soundfile as sf
+    from meeting_tool.wav_reader import PCM16Reader
     import torch
     from silero_vad import load_silero_vad, get_speech_timestamps
     state = {"signature": input_signature, "next_sample": 0, "regions": []}
@@ -134,12 +135,12 @@ def detect_speech(wav: Path, frames: int, checkpoint: Path, input_signature):
     model = load_silero_vad(onnx=True)
     block = 180 * SAMPLE_RATE
     overlap = 2 * SAMPLE_RATE
-    with sf.SoundFile(str(wav)) as audio:
+    with PCM16Reader(wav) as audio:
         for base in range(int(state["next_sample"]), frames, block):
             read_start = max(0, base - overlap)
             read_end = min(frames, base + block + overlap)
             audio.seek(read_start)
-            data = audio.read(read_end - read_start, dtype="float32")
+            data = audio.read(read_end - read_start)
             regions = get_speech_timestamps(torch.from_numpy(data), model,
                        sampling_rate=SAMPLE_RATE, threshold=0.45,
                        min_speech_duration_ms=120, min_silence_duration_ms=250,
@@ -160,7 +161,7 @@ def detect_speech(wav: Path, frames: int, checkpoint: Path, input_signature):
 
 def extract_embeddings(wav, windows, checkpoint, signature_data, speaker_root):
     import numpy as np
-    import soundfile as sf
+    from meeting_tool.wav_reader import PCM16Reader
     import torch
     import torchaudio.compliance.kaldi as kaldi
     from speakerlab.models.campplus.DTDNN import CAMPPlus
@@ -198,11 +199,11 @@ def extract_embeddings(wav, windows, checkpoint, signature_data, speaker_root):
                  vectors=vectors, completed=count)
         os.replace(temporary, checkpoint)
 
-    with sf.SoundFile(str(wav)) as audio, torch.inference_mode():
+    with PCM16Reader(wav) as audio, torch.inference_mode():
         for index in range(completed, len(windows)):
             start, end, _ = windows[index]
             audio.seek(start)
-            data = audio.read(end - start, dtype="float32")
+            data = audio.read(end - start)
             if not len(data):
                 raise RuntimeError("读取声纹音频失败，录音文件可能已改变")
             piece = torch.from_numpy(data)
@@ -366,7 +367,7 @@ def assess_groups(turns, requested_count):
 
 
 def run(args):
-    import soundfile as sf
+    from meeting_tool.wav_reader import wav_info
     import torch
     wav, output, root = args.wav.resolve(), args.output.resolve(), args.speaker_root.resolve()
     if not 0 <= args.speakers <= 20:
@@ -378,9 +379,7 @@ def run(args):
     torch.set_num_threads(4)
     output.parent.mkdir(parents=True, exist_ok=True)
     input_signature = signature(wav, args.speakers, model)
-    info = sf.info(str(wav))
-    if info.samplerate != SAMPLE_RATE or info.channels != 1:
-        raise ValueError("人物分析需要 16000 Hz 单声道 WAV，请先转换录音")
+    info = wav_info(wav)
     if info.frames <= 0:
         raise ValueError("录音为空")
     if output.is_file():
@@ -428,18 +427,25 @@ def run(args):
     emit("result", path=str(output), speaker_count=len(representatives))
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--wav", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--speakers", type=int, default=0)
-    parser.add_argument("--speaker-root", type=Path, default=Path(r"D:\Project\3D-Speaker"))
-    args = parser.parse_args()
+    if not __package__:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from meeting_tool.runtime_paths import is_frozen, resource_path, speaker_root
+    parser.add_argument("--speaker-root", type=Path,
+                        default=speaker_root() if is_frozen() else Path(r"D:\Project\3D-Speaker"))
+    args = parser.parse_args(argv)
     try:
         if os.name == "nt":
-            dll = Path(sys.prefix) / "Lib/site-packages/kaldi_native_fbank/lib"
-            if dll.is_dir():
-                _dll_handles.append(os.add_dll_directory(str(dll)))
+            directories = ([resource_path("torch", "lib"), resource_path("torchaudio", "lib"),
+                            resource_path("onnxruntime", "capi")] if is_frozen() else
+                           [Path(sys.prefix) / "Lib/site-packages/kaldi_native_fbank/lib"])
+            for dll in directories:
+                if dll.is_dir():
+                    _dll_handles.append(os.add_dll_directory(str(dll)))
         run(args)
     except Exception as error:
         traceback.print_exc(file=sys.stderr)

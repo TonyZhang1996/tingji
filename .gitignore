@@ -8,6 +8,7 @@
 !/app.py
 !/desktop.py
 !/requirements_desktop.txt
+!/requirements_windows.txt
 !/启动工具.cmd
 !/启动工具.vbs
 !/启动旧版界面.cmd
@@ -23,6 +24,13 @@
 !/scripts/
 /scripts/*
 !/scripts/check_publish.py
+!/scripts/windows/
+/scripts/windows/*
+!/scripts/windows/README.md
+!/scripts/windows/build_windows.py
+!/scripts/windows/prepare_vendor_manifest.py
+!/scripts/windows/tingji.spec
+!/scripts/windows/tingji.iss
 
 !/assets/
 /assets/*

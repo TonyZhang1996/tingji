@@ -15,7 +15,7 @@ import zlib
 ROOT = Path(__file__).resolve().parents[1]
 ROOT_FILES = {
     '.gitignore', '.gitattributes', 'README.md', 'README.en.md', 'app.py',
-    'desktop.py', 'requirements_desktop.txt', '启动工具.cmd', '启动工具.vbs',
+    'desktop.py', 'requirements_desktop.txt', 'requirements_windows.txt', '启动工具.cmd', '启动工具.vbs',
     '启动旧版界面.cmd', '启动旧版界面.vbs', '准备桌面环境.cmd',
 }
 WEB_FILES = {
@@ -27,6 +27,11 @@ BRAND_FILES = {'assets/tingji.svg', 'assets/tingji.png', 'assets/tingji.ico'}
 SCREENSHOT_FILES = {
     'docs/screenshots/transcript.png', 'docs/screenshots/summary.png',
     'docs/screenshots/review.png',
+}
+BUILD_FILES = {
+    'scripts/windows/README.md', 'scripts/windows/build_windows.py',
+    'scripts/windows/prepare_vendor_manifest.py', 'scripts/windows/tingji.spec',
+    'scripts/windows/tingji.iss',
 }
 FORBIDDEN_PARTS = {
     '.runtime', '.venv', 'venv', 'node_modules', '__pycache__', 'cache', 'work',
@@ -57,7 +62,7 @@ def allowed(name: str) -> bool:
         return False
     if path.suffix.lower() in FORBIDDEN_SUFFIXES or path.name.lower() == 'settings.json' or path.name.startswith('.env'):
         return False
-    if name in ROOT_FILES or name in WEB_FILES or name in BRAND_FILES or name in SCREENSHOT_FILES or name == 'scripts/check_publish.py':
+    if name in ROOT_FILES or name in WEB_FILES or name in BRAND_FILES or name in SCREENSHOT_FILES or name in BUILD_FILES or name == 'scripts/check_publish.py':
         return True
     if len(path.parts) == 2 and path.parts[0] == 'meeting_tool' and path.suffix == '.py':
         return True

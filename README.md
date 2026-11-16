@@ -40,6 +40,18 @@ Windows 本地会议转写工具：导入录音，按人物整理文字，回听
 
 ## 开始使用
 
+### Windows 安装包
+
+从 [GitHub Releases](https://github.com/TonyZhang1996/tingji/releases/latest) 下载 **Tingji-Setup-2.2.0-windows-x64.exe**，安装后启动听记即可。
+
+支持 Windows 10/11 64 位，使用 CPU 即可运行，无需显卡或 CUDA。安装包内置 Python、FFmpeg、人物分析依赖和模型，并在缺少 WebView2 时自动安装，无需手动配置运行环境。
+
+转写和总结需要联网，并填写**你自己的 DeepSeek API Key**，费用从你的 DeepSeek 账户扣除。安装包不包含任何人的 API Key、录音、转写结果或总结。
+
+默认安装位置为 `%LOCALAPPDATA%\Programs\Tingji`，任务、录音缓存、转写和总结保存在 `%LOCALAPPDATA%\Tingji`。卸载程序会保留这些个人数据，可在听记中删除不再需要的任务。当前安装包未做代码签名。
+
+### 从源码运行
+
 需要 Windows、Python 3.11、Microsoft Edge WebView2，以及可在 `PATH` 中找到的 `ffmpeg` 和 `ffprobe`。也可把 FFmpeg 程序放进项目的 `bin` 目录。
 
 克隆或下载仓库后，在项目目录打开 PowerShell：
@@ -95,6 +107,8 @@ npm run build
 & $env:MEETING_SPEAKER_PYTHON -X utf8 -m unittest discover -s tests -v
 ```
 
-本地完整回归已通过 82 项测试。测试使用临时合成音频和模拟接口，不调用真实付费 API；此结果不代表真实录音的识别准确率。
+自动化测试覆盖转写进度恢复、人物聚类、总结、历史删除和安装包隐私边界。测试使用临时合成音频和模拟接口，不调用真实付费 API；通过测试不代表真实录音的识别准确率。
 
 shadcn/ui 组件的来源和第三方许可见 [组件来源](web/COMPONENT-SOURCES.txt)与 [shadcn/ui 许可](web/SHADCN-LICENSE.txt)。
+
+Windows 安装包的构建步骤、依赖版本和发布前检查见 [安装包构建说明](scripts/windows/README.md)。

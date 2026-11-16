@@ -10,23 +10,35 @@ import webbrowser
 
 from meeting_tool.desktop_controller import MeetingController
 from meeting_tool.desktop_server import DesktopServer
+from meeting_tool.runtime_paths import resource_path, user_data_root
+from meeting_tool.version import __version__
 
 APP_DIR = Path(__file__).resolve().parent
-APP_ICON = APP_DIR / "assets" / "tingji.ico"
+APP_ICON = resource_path("assets", "tingji.ico")
 WINDOWS_APP_ID = "Local.Tingji.MeetingTranscription"
 
 
-def main():
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "--speaker-worker":
+        from meeting_tool.diarization_worker import main as speaker_main
+        return speaker_main(argv[1:])
     parser = argparse.ArgumentParser(description="DeepSeek 会议转写工作台")
     parser.add_argument("--browser", action="store_true", help="仅用于本机浏览器预览")
     parser.add_argument("--no-open", action="store_true", help="不自动打开预览浏览器")
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--audio", type=Path)
-    args = parser.parse_args()
-    controller = MeetingController(APP_DIR)
+    parser.add_argument("--self-check", type=Path, help=argparse.SUPPRESS)
+    args = parser.parse_args(argv)
+    if args.self_check is not None:
+        from meeting_tool.runtime_check import check_runtime
+        return check_runtime(args.self_check)
+    data_dir = user_data_root()
+    data_dir.mkdir(parents=True, exist_ok=True)
+    controller = MeetingController(data_dir)
     if args.audio:
         controller.select_audio(args.audio)
-    server = DesktopServer(controller, APP_DIR / "web" / "dist", port=args.port).start()
+    server = DesktopServer(controller, resource_path("web", "dist"), port=args.port).start()
     if args.browser:
         print(server.url, flush=True)
         if not args.no_open:
@@ -56,7 +68,7 @@ def main():
         result = set_app_id(WINDOWS_APP_ID)
         if result < 0:
             raise OSError(f"无法设置听记任务栏标识：0x{result & 0xffffffff:08X}")
-    window = webview.create_window("听记 · 会议转写工作台 2.1", server.url, width=1280, height=720,
+    window = webview.create_window(f"听记 · 会议转写工作台 {__version__}", server.url, width=1280, height=720,
                                    min_size=(980, 680), maximized=True,
                                    background_color="#f7f8fa", text_select=True)
     def on_shown():

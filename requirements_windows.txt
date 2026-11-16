@@ -1,0 +1,12 @@
+# Windows x64, CPython 3.12. Install the CPU wheels first with the official
+# https://download.pytorch.org/whl/cpu index, then install this file from PyPI.
+-r requirements_desktop.txt
+torch==2.6.0+cpu
+torchaudio==2.6.0+cpu
+numpy==1.26.4
+scipy==1.13.1
+scikit-learn==1.5.2
+onnxruntime==1.20.1
+silero-vad==5.1.2
+pyinstaller==6.22.3
+pyinstaller-hooks-contrib==2026.10

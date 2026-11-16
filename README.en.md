@@ -40,6 +40,18 @@ Summaries use schema-constrained output through DeepSeek Responses, with speaker
 
 ## Getting started
 
+### Windows installer
+
+Download **Tingji-Setup-2.2.0-windows-x64.exe** from [GitHub Releases](https://github.com/TonyZhang1996/tingji/releases/latest), install it and launch Tingji.
+
+The installer supports 64-bit Windows 10/11 and runs on the CPU; a GPU or CUDA is not required. It includes Python, FFmpeg, the speaker-analysis dependencies and models, and automatically installs WebView2 when needed. No manual environment setup is required.
+
+Transcription and summarization require an internet connection and **your own DeepSeek API key**. Charges apply to your DeepSeek account. The installer contains no personal API keys, recordings, transcripts or summaries.
+
+The default installation folder is `%LOCALAPPDATA%\Programs\Tingji`. Tasks, audio caches, transcripts and summaries are stored in `%LOCALAPPDATA%\Tingji`. Uninstalling preserves this personal data; unwanted tasks can be deleted within Tingji. The current installer is not code-signed.
+
+### Running from source
+
 You need Windows, Python 3.11, Microsoft Edge WebView2, and `ffmpeg` and `ffprobe` available on `PATH`. Alternatively, place the FFmpeg executables in the project's `bin` directory.
 
 After cloning or downloading the repository, open PowerShell in the project directory:
@@ -95,6 +107,8 @@ From the project root, run the full test suite with a Python environment contain
 & $env:MEETING_SPEAKER_PYTHON -X utf8 -m unittest discover -s tests -v
 ```
 
-The local full regression passed 82 tests. Tests use temporary synthetic audio and simulated services, with no real paid API calls. This does not establish recognition accuracy on real recordings.
+Automated tests cover transcription recovery, speaker clustering, summaries, history deletion and installer privacy boundaries. They use temporary synthetic audio and simulated services, with no real paid API calls. Passing these tests does not establish recognition accuracy on real recordings.
 
 shadcn/ui component sources and third-party notices are retained in [component sources](web/COMPONENT-SOURCES.txt) and the [shadcn/ui license](web/SHADCN-LICENSE.txt).
+
+See the [Windows packaging guide](scripts/windows/README.md) for installer build steps, pinned dependencies and publication checks.

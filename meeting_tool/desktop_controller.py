@@ -21,7 +21,7 @@ from .exports import atomic_json, export_transcript
 from .summarization import (ATTRIBUTION_POLICY, DEFAULT_MODEL, PROMPT_VERSION, SummaryService,
                             render_markdown, speaker_catalog, validate_content)
 
-VERSION = "2.1"
+from .version import __version__ as VERSION
 MEDIA_EXTENSIONS = {".wav", ".m4a", ".mp3", ".mp4", ".aac", ".ogg", ".opus", ".flac", ".wma", ".mkv", ".mov", ".amr"}
 EXPORT_FILES = {"txt": "完整转写.txt", "md": "完整转写.md", "json": "完整转写.json", "csv": "分段明细.csv", "srt": "片段时间轴_非逐字字幕.srt"}
 _JSON_CACHE = OrderedDict()

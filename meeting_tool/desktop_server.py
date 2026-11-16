@@ -13,6 +13,7 @@ import threading
 from urllib.parse import unquote, urlsplit
 
 from .desktop_controller import MeetingController
+from .version import __version__
 
 
 class DesktopServer:
@@ -23,7 +24,7 @@ class DesktopServer:
         self.nonce = secrets.token_urlsafe(18)
         owner = self
         class Handler(BaseHTTPRequestHandler):
-            server_version = "MeetingDesktop/2.1"
+            server_version = f"MeetingDesktop/{__version__}"
             def log_message(self, *_args):
                 pass
             def do_GET(self):

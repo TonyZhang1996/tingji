@@ -1,4 +1,4 @@
-"""Run the installed, offline speaker models in their existing Python environment."""
+"""Run bundled offline models, or reuse a source checkout's model environment."""
 from __future__ import annotations
 
 import json
@@ -10,18 +10,31 @@ import subprocess
 import threading
 from typing import Callable
 
+from .runtime_paths import (is_frozen, speaker_child_environment, speaker_executable,
+                            speaker_root as bundled_speaker_root)
+
 DEFAULT_PYTHON = Path(r"D:\miniconda3\envs\firered-speaker\python.exe")
 DEFAULT_SPEAKER_ROOT = Path(r"D:\Project\3D-Speaker")
 
 
+def _configuration() -> tuple[Path, Path]:
+    if is_frozen():
+        return speaker_executable(), bundled_speaker_root()
+    return (Path(os.environ.get("MEETING_SPEAKER_PYTHON", str(DEFAULT_PYTHON))),
+            Path(os.environ.get("MEETING_SPEAKER_ROOT", str(DEFAULT_SPEAKER_ROOT))))
+
+
 def environment_status() -> tuple[bool, str]:
     """A fast local check; it neither imports the models nor downloads anything."""
-    python = Path(os.environ.get("MEETING_SPEAKER_PYTHON", str(DEFAULT_PYTHON)))
-    root = Path(os.environ.get("MEETING_SPEAKER_ROOT", str(DEFAULT_SPEAKER_ROOT)))
+    python, root = _configuration()
     model = root / "pretrained_models/campplus/campplus_cn_en_common.pt"
     if not python.is_file():
+        if is_frozen():
+            return False, "安装目录内缺少人物分析程序，请重新安装听记。"
         return False, f"未找到本地人物分析环境：{python}"
     if not model.is_file():
+        if is_frozen():
+            return False, "安装目录内缺少人物分析模型，请重新安装听记。"
         return False, f"未找到本地声纹模型：{model}"
     return True, "已找到本地人物分析环境和声纹模型，无需下载模型"
 
@@ -52,8 +65,9 @@ def diarize(wav_path: Path, work_dir: Path, num_speakers: int = 0,
             cancel_event: threading.Event | None = None) -> list[dict]:
     """Return globally numbered speaker turns, using only local installed models.
 
-    Set MEETING_SPEAKER_PYTHON / MEETING_SPEAKER_ROOT to reuse another compatible
-    existing installation. Stopping preserves phase checkpoints for the next run.
+    Source checkouts can set MEETING_SPEAKER_PYTHON / MEETING_SPEAKER_ROOT to
+    reuse an environment. Installed builds always use their bundled resources.
+    Stopping preserves phase checkpoints for the next run.
     """
     if not 0 <= int(num_speakers) <= 20:
         raise ValueError("会议人数应为 0（自动估计）或 1～20")
@@ -65,16 +79,12 @@ def diarize(wav_path: Path, work_dir: Path, num_speakers: int = 0,
         raise RuntimeError(status)
     work_dir.mkdir(parents=True, exist_ok=True)
     output = work_dir / "diarization.json"
-    python = Path(os.environ.get("MEETING_SPEAKER_PYTHON", str(DEFAULT_PYTHON)))
-    command = [str(python), "-X", "utf8", "-u", str(Path(__file__).with_name("diarization_worker.py")),
-               "--wav", str(wav_path), "--output", str(output),
-               "--speakers", str(int(num_speakers)), "--speaker-root",
-               os.environ.get("MEETING_SPEAKER_ROOT", str(DEFAULT_SPEAKER_ROOT))]
-    env = os.environ.copy()
-    env["PYTHONUTF8"] = "1"
-    env["OMP_NUM_THREADS"] = "4"
-    env["HF_HUB_OFFLINE"] = "1"
-    env["TRANSFORMERS_OFFLINE"] = "1"
+    python, root = _configuration()
+    command = ([str(python), "--speaker-worker"] if is_frozen() else
+               [str(python), "-X", "utf8", "-u", str(Path(__file__).with_name("diarization_worker.py"))])
+    command += ["--wav", str(wav_path), "--output", str(output),
+                "--speakers", str(int(num_speakers)), "--speaker-root", str(root)]
+    env = speaker_child_environment()
     messages: queue.Queue[str | None] = queue.Queue()
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                text=True, encoding="utf-8", errors="replace", env=env,

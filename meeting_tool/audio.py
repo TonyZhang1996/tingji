@@ -10,6 +10,8 @@ import threading
 import time
 import wave
 
+from .runtime_paths import is_frozen, resource_path
+
 
 class CancelledError(RuntimeError):
     pass
@@ -21,6 +23,11 @@ def _check_cancel(cancel_event: threading.Event | None) -> None:
 
 
 def find_binary(name: str) -> str:
+    if is_frozen():
+        bundled = resource_path("bin", name + (".exe" if os.name == "nt" else ""))
+        if bundled.is_file():
+            return str(bundled)
+        raise RuntimeError(f"安装目录内缺少 {name}，请重新安装听记。")
     found = shutil.which(name)
     if found:
         return found
