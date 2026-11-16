@@ -10,7 +10,9 @@ The interface uses React and shadcn/ui, hosted by pywebview on Windows and Kotli
 
 See the workflow from importing a recording to speaker transcripts, playback review, overall and per-speaker summaries, action items and exports. This portrait (9:16) video has Chinese narration and captions. All meeting content is fictional demo data.
 
-[▶ Watch or download the 38-second introduction (MP4)](https://github.com/TonyZhang1996/tingji/releases/download/media-2026-11-17/Tingji-introduction-38s.mp4)
+<video src="https://github.com/user-attachments/assets/5148c60d-25cf-4215-a14b-35efc48d28e6" controls width="360" height="640"></video>
+
+Unmute the player to hear the narration, or [download the 38-second introduction (MP4)](https://github.com/TonyZhang1996/tingji/releases/download/media-2026-11-17/Tingji-introduction-38s.mp4).
 
 ## Interface preview
 
