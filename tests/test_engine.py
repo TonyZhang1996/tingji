@@ -75,6 +75,17 @@ class EngineTests(unittest.TestCase):
         other = RunConfig(self.source, self.config.output_root, num_speakers=3)
         self.assertNotEqual(job_directory(self.config), job_directory(other))
 
+    def test_enhancement_failure_stops_before_sending_any_audio(self):
+        self.config.enhance_voice = True
+        job = self.prepared_job()
+        with patch("meeting_tool.engine.enhance_audio", side_effect=RuntimeError("enhancement failed")), \
+                patch("meeting_tool.engine.DeepSeekASR") as asr:
+            with self.assertRaisesRegex(RuntimeError, "enhancement failed"):
+                job.run()
+        asr.assert_not_called()
+        checkpoint = json.loads((job.job_dir / "checkpoint.json").read_text(encoding="utf-8"))
+        self.assertTrue(all(row["state"] == "pending" for row in checkpoint["segments"]))
+
     def test_new_speaker_version_uses_new_task_and_preserves_paid_legacy_result(self):
         with patch.object(engine_module, "WORKFLOW_VERSION", "1.0-global-turns-110s"), \
                 patch.object(engine_module, "DIARIZATION_VERSION", "speaker-v4-stream-global"):

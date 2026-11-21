@@ -32,6 +32,7 @@ class DeepSeekProxyInstrumentedTest {
         val context=object:ContextWrapper(instrumentation.targetContext) {
             override fun getFilesDir()=sandbox
             override fun getCacheDir()=File(sandbox,"cache").also{it.mkdirs()}
+            override fun getNoBackupFilesDir()=File(sandbox,"no-backup").also{it.mkdirs()}
         }
         val asrRequests=AtomicInteger()
         val summaryRequests=AtomicInteger()

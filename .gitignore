@@ -155,6 +155,7 @@
 !/mobile/android/app/src/main/java/com/tingji/app/engine/
 /mobile/android/app/src/main/java/com/tingji/app/engine/*
 !/mobile/android/app/src/main/java/com/tingji/app/engine/AudioTools.kt
+!/mobile/android/app/src/main/java/com/tingji/app/engine/ApiKeyStore.kt
 !/mobile/android/app/src/main/java/com/tingji/app/engine/DeepSeekClient.kt
 !/mobile/android/app/src/main/java/com/tingji/app/engine/EngineFiles.kt
 !/mobile/android/app/src/main/java/com/tingji/app/engine/MeetingEngine.kt
@@ -203,6 +204,8 @@
 **/.env.*
 **/*secret*
 **/*credential*
+!/meeting_tool/credential_store.py
+!/tests/test_credential_store.py
 **/*.pem
 **/*.key
 **/*.p12

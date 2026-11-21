@@ -231,6 +231,8 @@ html.android-app {
 .android-app .android-welcome-note p { margin: 0; font-size: 13px; line-height: 1.8; color: #4d596b; }
 .android-app .android-welcome-dialog>[data-slot=dialog-footer] { flex-shrink: 0; padding: 12px 20px; border-top: 1px solid var(--border); }
 .android-app .android-welcome-dialog>[data-slot=dialog-footer]>button { flex: 1; }
+.android-app .api-key-saved-state>button,
+.android-app .summary-key-saved>button { min-height: 48px; height: auto; }
 
 /* Android uses one real document scroller, including the tools above it. */
 .android-app .android-content-scroll {

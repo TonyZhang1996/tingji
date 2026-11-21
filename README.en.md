@@ -46,6 +46,7 @@ Listen to a segment, correct its text or speaker assignment, then mark it as rev
 ## Features
 
 - **Long recordings:** automatic segmentation, immediate saving of successful segments and resumable processing. Continuing a task skips segments already completed.
+- **Voice enhancement (Windows):** enable this optional setting when creating a task to reduce background noise and lift quieter speech locally. Transcription uses the enhanced audio. Speaker analysis and playback use the original audio.
 - **Speaker review:** consistent speaker IDs throughout a recording, voice samples, editable names and corrections to text or speaker assignments.
 - **History management:** delete a task from the sidebar after confirmation. Its local transcript, corrections, summary and cache are removed; the original recording is preserved. Deletion is disabled while processing.
 - **Playback and exports:** jump to a segment for review; export TXT, Markdown, JSON, CSV or a segment timeline.
@@ -59,6 +60,8 @@ Summaries use schema-constrained output through DeepSeek Responses, with speaker
 
 Download **Tingji-Setup-2.2.0-windows-x64.exe** from [GitHub Releases](https://github.com/TonyZhang1996/tingji/releases/latest), install it and launch Tingji.
 
+The Windows installer and Android APK are released separately. The public Windows installer remains at 2.2.0. Voice enhancement, inline transcript editing and encrypted API-key storage in the updated Windows source are available by following “Running from source” below.
+
 The installer supports 64-bit Windows 10/11 and runs on the CPU; a GPU or CUDA is not required. It includes Python, FFmpeg, the speaker-analysis dependencies and models, and automatically installs WebView2 when needed. No manual environment setup is required.
 
 Transcription and summarization require an internet connection and **your own DeepSeek API key**. Charges apply to your DeepSeek account. The installer contains no personal API keys, recordings, transcripts or summaries.
@@ -67,11 +70,11 @@ The default installation folder is `%LOCALAPPDATA%\Programs\Tingji`. Tasks, audi
 
 ### Android prerelease
 
-The current Android prerelease is **2.3.0-android.3**, targeting ARM64 phones such as the vivo X300. Import an existing recording through the system picker or share menu, analyze speakers locally, then call DeepSeek directly with your own API key. Models are bundled in the APK; no Python or manual model setup is needed. The interface is in Chinese.
+The current Android prerelease is **2.3.0-android.4**. The APK includes arm64-v8a and x86_64 and requires Android 8.0 or later; ARM64 phones such as the vivo X300 remain the primary target. Import an existing recording through the system picker or share menu, analyze speakers locally, then call DeepSeek directly with your own API key. Models are bundled in the APK; no Python or manual model setup is needed. The interface is in Chinese.
 
-Use the prominent “全屏阅读” action in the transcript or summary. Scrolling naturally moves task information and tools out of view; the player has an independent collapse control. Segment previews wait for seeking and stop at the selected end. First-use onboarding accepts your API key or lets you skip. Install updates over the existing app to retain tasks; do not uninstall first.
+Use the prominent “全屏阅读” action in the transcript or summary. Scrolling naturally moves task information and tools out of view; the player has an independent collapse control. Segment previews wait for seeking and stop at the selected end. First-use onboarding lets you explicitly save your own API key for reuse on this device, or skip for now. Install updates over the existing app to retain tasks; do not uninstall first.
 
-Download the [Android APK](https://github.com/TonyZhang1996/tingji/releases/download/v2.3.0-android.3/Tingji-2.3.0-android.3-arm64-v8a.apk) (about 60 MB, ARM64 devices running Android 8.0 or later). Physical vivo X300 validation is still pending. Processing time, thermals, battery use and recognition accuracy need device testing. See the [release notes](https://github.com/TonyZhang1996/tingji/releases/tag/v2.3.0-android.3) for verified results and the [Android guide](mobile/README.md#english) for use and privacy details.
+Download the [Tingji-2.3.0-android.4.apk](https://github.com/TonyZhang1996/tingji/releases/download/v2.3.0-android.4/Tingji-2.3.0-android.4.apk) (about 96 MB; arm64-v8a and x86_64; Android 8.0 or later). Physical vivo X300 validation is still pending. Processing time, thermals, battery use and recognition accuracy need device testing. See the [release notes](https://github.com/TonyZhang1996/tingji/releases/tag/v2.3.0-android.4) for verified results and the [Android guide](mobile/README.md#english) for use and privacy details.
 
 **Uninstalling Android deletes app-private data.** Keep separate copies of source recordings and export important text results first. The Windows installer continues to preserve its local data on uninstall.
 
@@ -104,7 +107,7 @@ Once the dependencies are configured, you can also use `启动工具.vbs`. Use `
 
 Choose a recording → specify the speaker count → analyze and name speakers using voice samples → enter a DeepSeek API key and transcribe → review the recording → summarize or export.
 
-The API key stays in the current window's memory and is not written to settings, logs or task results. ASR is charged by uploaded audio; summaries incur separate text-model charges. See [DeepSeek's pricing documentation](https://api-docs.deepseek.com/quick_start/pricing/). Requests with an uncertain outcome are not automatically resubmitted, to avoid duplicate charges.
+Android 2.3.0-android.4 and the updated Windows source let you save, replace or clear your API key in Settings. Save it separately on each device. The Windows source uses the current user's DPAPI; Android uses Android Keystore for device-bound encryption. Encrypted credentials stay on the device, separate from settings, logs, tasks and exports. ASR is charged by uploaded audio and summaries incur separate text-model charges. See [DeepSeek's pricing documentation](https://api-docs.deepseek.com/quick_start/pricing/). Requests with an uncertain outcome are not automatically resubmitted, to avoid duplicate charges.
 
 ## Privacy and limitations
 

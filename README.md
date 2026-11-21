@@ -46,6 +46,7 @@ https://github.com/user-attachments/assets/5148c60d-25cf-4215-a14b-35efc48d28e6
 ## 功能
 
 - **长录音转写**：自动分段、逐段保存、恢复进度；成功片段不会因继续转写而重新提交。
+- **人声增强（Windows）**：新建转写时可开启，在本机减轻底噪并抬高较轻的声音。增强音频用于文字转写，人物分析和回听使用原始音频。
 - **人物校对**：整场统一人物编号，试听声音、填写姓名、修改文字或人物归属。
 - **历史管理**：在左侧任务旁点击删除，确认后清除该任务的转写、校对、总结和缓存，保留原始录音；处理过程中不可删除。
 - **录音回听与导出**：点击片段跳转播放，支持 TXT、Markdown、JSON、CSV 和片段时间轴。
@@ -59,6 +60,8 @@ https://github.com/user-attachments/assets/5148c60d-25cf-4215-a14b-35efc48d28e6
 
 从 [GitHub Releases](https://github.com/TonyZhang1996/tingji/releases/latest) 下载 **Tingji-Setup-2.2.0-windows-x64.exe**，安装后启动听记即可。
 
+Windows 安装包与 Android APK 分别发布。当前公开 Windows 安装包仍为 2.2.0；Windows 源码新增的人声增强、行内文字编辑和加密保存 API Key，可按下方“从源码运行”使用。
+
 支持 Windows 10/11 64 位，使用 CPU 即可运行，无需显卡或 CUDA。安装包内置 Python、FFmpeg、人物分析依赖和模型，并在缺少 WebView2 时自动安装，无需手动配置运行环境。
 
 转写和总结需要联网，并填写**你自己的 DeepSeek API Key**，费用从你的 DeepSeek 账户扣除。安装包不包含任何人的 API Key、录音、转写结果或总结。
@@ -67,11 +70,11 @@ https://github.com/user-attachments/assets/5148c60d-25cf-4215-a14b-35efc48d28e6
 
 ### Android 预发布版
 
-Android 版本为 **2.3.0-android.3**，以 vivo X300 等 ARM64 安卓手机为主要适配目标。通过系统文件选择器或分享入口导入已有录音，在手机本地分析人物，再直接调用使用者自己的 DeepSeek API 转写和总结。模型随 APK 提供，无需配置 Python 或模型环境。
+Android 版本为 **2.3.0-android.4**，安装包包含 arm64-v8a 和 x86_64，要求 Android 8.0 及以上；主要适配目标为 vivo X300 等 ARM64 安卓手机。通过系统文件选择器或分享入口导入已有录音，在手机本地分析人物，再直接调用使用者自己的 DeepSeek API 转写和总结。模型随 APK 提供，无需配置 Python 或模型环境。
 
-文字和总结页都支持醒目的“全屏阅读”，上滑时任务信息和操作区自然滚走；播放器可独立收起，片段回听在定位完成后播放并于本段末尾停止。首次使用会弹窗引导填写 API Key，也可稍后填写。更新请直接覆盖安装，保留已有任务，不要先卸载。
+文字和总结页都支持醒目的“全屏阅读”，上滑时任务信息和操作区自然滚走；播放器可独立收起，片段回听在定位完成后播放并于本段末尾停止。首次使用会弹窗引导填写自己的 API Key，明确保存后可在这台设备上持续使用，也可选择“稍后填写”。更新请直接覆盖安装，保留已有任务，不要先卸载。
 
-手机可直接[下载 Android APK](https://github.com/TonyZhang1996/tingji/releases/download/v2.3.0-android.3/Tingji-2.3.0-android.3-arm64-v8a.apk)（约 60 MB，Android 8.0 以上 ARM64 设备）。这是 Android 预发布版，尚未在 vivo X300 真机上完成验收；处理速度、发热、耗电和识别准确率需以实际测试为准。[发布说明](https://github.com/TonyZhang1996/tingji/releases/tag/v2.3.0-android.3)列出已验证结果，使用说明和隐私边界见 [Android 说明](mobile/README.md)。
+手机可直接[下载 Tingji-2.3.0-android.4.apk](https://github.com/TonyZhang1996/tingji/releases/download/v2.3.0-android.4/Tingji-2.3.0-android.4.apk)（约 96 MB，支持 arm64-v8a 和 x86_64，Android 8.0 及以上）。这是 Android 预发布版，尚未在 vivo X300 真机上完成验收；处理速度、发热、耗电和识别准确率需以实际测试为准。[发布说明](https://github.com/TonyZhang1996/tingji/releases/tag/v2.3.0-android.4)列出已验证结果，使用说明和隐私边界见 [Android 说明](mobile/README.md)。
 
 **安卓卸载会删除应用私有数据**，请先另外备份原录音，并导出需要保留的文字结果。Windows 版卸载保留本地数据的行为保持不变。
 
@@ -104,7 +107,7 @@ $env:MEETING_SPEAKER_ROOT = "D:\Models\3D-Speaker"
 
 选择录音 → 确认人数 → 分析人物并试听命名 → 填入 DeepSeek API Key 开始转写 → 回听校对 → AI 总结或导出。
 
-API Key 仅在当前窗口内存中使用，不写入设置、日志或任务结果。ASR 按上传音频计费，总结按文字量另行计费，具体以 [DeepSeek 官方说明](https://api-docs.deepseek.com/quick_start/pricing/)为准。结果不明的请求默认不自动重发，避免重复扣费。
+Android 2.3.0-android.4 和当前 Windows 源码可在转写设置里保存、更换或清除 API Key，每台设备需单独保存。Windows 源码使用当前用户的 DPAPI，Android 使用 Android Keystore 按设备加密。密文保存在本机，普通设置、日志、任务和导出不包含用户密钥。ASR 按上传音频计费，总结按文字量另行计费，具体以 [DeepSeek 官方说明](https://api-docs.deepseek.com/quick_start/pricing/)为准。结果不明的请求默认不自动重发，避免重复扣费。
 
 ## 隐私与识别边界
 

@@ -35,6 +35,7 @@ class MeetingEngineInstrumentedTest {
     private var longText=false
     private var malformedSummary=false
     private val requests=mutableListOf<Pair<String,ByteArray>>()
+    private val clientKeys=mutableListOf<String>()
     private val analyzer=object:SpeakerAnalyzer {
         override fun analyze(wavFile:File,workDir:File,numSpeakers:Int,cancelled:()->Boolean,onProgress:(Int,Int,String)->Unit):List<SpeakerTurn> {
             assertEquals(16000,AudioTools.wavInfo(wavFile).sampleRate)
@@ -44,11 +45,16 @@ class MeetingEngineInstrumentedTest {
     @Before fun prepare() {
         val base=InstrumentationRegistry.getInstrumentation().targetContext
         testDir=File(base.cacheDir,"engine-test-${randomId()}");testDir.mkdirs()
-        context=object:ContextWrapper(base) {override fun getFilesDir()=testDir;override fun getCacheDir()=File(testDir,"cache").also{it.mkdirs()}}
+        context=object:ContextWrapper(base) {
+            override fun getFilesDir()=testDir
+            override fun getCacheDir()=File(testDir,"cache").also{it.mkdirs()}
+            override fun getNoBackupFilesDir()=File(testDir,"no-backup").also{it.mkdirs()}
+        }
         engine=newEngine()
     }
-    @After fun cleanup() {engine?.close();testDir.deleteRecursively()}
+    @After fun cleanup() {engine?.close();if(::context.isInitialized)runCatching {ApiKeyStore(context).clear()};testDir.deleteRecursively()}
     private fun newEngine()=MeetingEngine(context,{"https://appassets.androidplatform.net/media/${it.name}"},{},analyzer) { secret,cancelled ->
+        synchronized(clientKeys){clientKeys.add(secret)}
         DeepSeekClient(secret,cancelled) { endpoint ->
             assertTrue(endpoint.startsWith("https://api.deepseek.com/"))
             FakeConnection(endpoint) {body-> respond(endpoint,body)}
@@ -113,6 +119,96 @@ class MeetingEngineInstrumentedTest {
         RandomAccessFile(file,"rw").use {it.write(b.array());it.setLength(bytes+44L)}
     }
     private fun selected(state:JSONObject)=state.getJSONObject("selected_job")
+    // These fault-injection probes also run against the signed release app.
+    // Kotlin internal getters include a debug/release module suffix, so read
+    // our own backing fields without relying on variant-specific method names.
+    private fun credentialFile(store:ApiKeyStore=ApiKeyStore(context))=store.javaClass.getDeclaredField("credentialFile").run {isAccessible=true;get(store) as File}
+    private fun wrappingAlias(store:ApiKeyStore)=store.javaClass.getDeclaredField("keyAlias").run {isAccessible=true;get(store) as String}
+
+    @Test fun encryptedCredentialSurvivesRestartAndFeedsTasksWithoutExposingPlaintext() {
+        assertFalse(engine!!.state().getBoolean("api_key_saved"))
+        val id=importAndAnalyze()
+        engine!!.dispatch("config",JSONObject().put("api_key_prompt_seen",true))
+        val saved=engine!!.dispatch("save_api_key",JSONObject().put("api_key",key))
+        assertTrue(saved.getBoolean("api_key_saved"));assertEquals(0,asrCalls.get());assertEquals(0,summaryCalls.get())
+        val store=ApiKeyStore(context)
+        assertTrue(within(context.noBackupFilesDir,credentialFile(store)));assertTrue(credentialFile(store).length()>key.length)
+        val first=credentialFile(store).readBytes()
+        engine!!.dispatch("save_api_key",JSONObject().put("api_key",key))
+        assertFalse("Encryption must use a fresh nonce",first.contentEquals(credentialFile(store).readBytes()))
+        engine!!.close();engine=newEngine()
+        assertTrue(engine!!.state().getBoolean("api_key_saved"))
+        assertTrue(engine!!.state().getJSONObject("settings").getBoolean("api_key_prompt_seen"))
+        engine!!.dispatch("transcribe",JSONObject());assertTrue(selected(idle()).getBoolean("complete"))
+        engine!!.dispatch("summarize",JSONObject().put("allow_partial",false))
+        assertEquals("complete",selected(idle()).getJSONObject("ai_summary").getString("status"))
+        synchronized(clientKeys){assertTrue(clientKeys.isNotEmpty());assertTrue(clientKeys.all{it==key})}
+        assertFalse(engine!!.state().toString().contains(key))
+        testDir.walkTopDown().filter{it.isFile}.forEach {file->
+            val bytes=file.readBytes()
+            assertFalse("Credential persisted in ${file.name}",bytes.toString(Charsets.ISO_8859_1).contains(key))
+            assertFalse("UTF-16 credential persisted in ${file.name}",bytes.toString(Charsets.UTF_16LE).contains(key))
+        }
+        val jobFile=File(testDir,"tingji/jobs/$id/job.json");val jobBeforeClear=jobFile.readText()
+        val asrBefore=asrCalls.get();val summaryBefore=summaryCalls.get()
+        assertFalse(engine!!.dispatch("clear_api_key",JSONObject()).getBoolean("api_key_saved"))
+        assertFalse(credentialFile(store).exists());assertEquals(jobBeforeClear,jobFile.readText())
+        engine!!.close();engine=newEngine();assertFalse(engine!!.state().getBoolean("api_key_saved"))
+        try {engine!!.dispatch("transcribe",JSONObject());fail("An absent credential must not start a request")}
+        catch(error:IllegalArgumentException){assertTrue(error.message!!.contains("保存"));assertFalse(error.message!!.contains(key))}
+        assertEquals(asrBefore,asrCalls.get());assertEquals(summaryBefore,summaryCalls.get())
+        assertTrue(File(testDir,"tingji/jobs/$id/source.wav").isFile);assertNotNull(engine!!.summaryFile())
+        // Existing clients can still provide a temporary key without saving it.
+        engine!!.dispatch("transcribe",JSONObject().put("api_key",key));idle()
+        assertFalse(engine!!.state().getBoolean("api_key_saved"));assertFalse(credentialFile(store).exists())
+    }
+    @Test fun malformedCredentialsCannotReplaceStoredKeyOrSilentlyUseItsFallback() {
+        engine!!.dispatch("save_api_key",JSONObject().put("api_key",key))
+        val file=credentialFile();val encrypted=file.readBytes()
+        val invalid=listOf<Any>(""," ","bad key","Bearer value","x".repeat(513),"$key\n","$key\r","$key\u0000","$key\t","密钥",1,JSONObject.NULL,JSONObject())
+        for(value in invalid) {
+            try {engine!!.dispatch("save_api_key",JSONObject().put("api_key",value));fail("Invalid credentials must not overwrite saved data")}
+            catch(error:IllegalArgumentException){assertFalse(error.message.orEmpty().contains(key))}
+            assertArrayEquals(encrypted,file.readBytes());assertTrue(engine!!.state().getBoolean("api_key_saved"))
+            for(action in listOf("transcribe","summarize")) {
+                try {engine!!.dispatch(action,JSONObject().put("api_key",value));fail("An invalid explicit key must not fall back to the saved key")}
+                catch(error:IllegalArgumentException){assertFalse(error.message.orEmpty().contains(key))}
+            }
+        }
+        try {engine!!.dispatch("save_api_key",JSONObject().put("api_key",key).put("unexpected",true));fail("Only the credential belongs in this action")}
+        catch(_:IllegalArgumentException){}
+        assertArrayEquals(encrypted,file.readBytes())
+        assertEquals(0,asrCalls.get());assertEquals(0,summaryCalls.get());assertFalse(engine!!.state().toString().contains(key))
+    }
+    @Test fun tamperedCiphertextOrMissingWrappingKeyFailsClosedAndCanBeReplacedOrCleared() {
+        val store=ApiKeyStore(context);store.save(key)
+        val interrupted=AtomicFile(credentialFile(store)).startWrite()
+        interrupted.write(byteArrayOf(1,2,3));interrupted.close()
+        assertEquals(key,ApiKeyStore(context).load())
+        val damaged=credentialFile(store).readBytes().also {it[it.lastIndex]=(it.last().toInt() xor 1).toByte()}
+        credentialFile(store).writeBytes(damaged)
+        assertFalse(engine!!.state().getBoolean("api_key_saved"))
+        try {engine!!.dispatch("transcribe",JSONObject());fail("Unauthenticated ciphertext must never become a credential")}
+        catch(error:ApiKeyStore.SavedKeyUnavailable){assertTrue(error.message!!.contains("重新保存"));assertFalse(error.message!!.contains(key))}
+        assertArrayEquals(damaged,credentialFile(store).readBytes());assertEquals(0,asrCalls.get())
+        val replacement="replacement-fixture-key-not-real"
+        engine!!.dispatch("save_api_key",JSONObject().put("api_key",replacement))
+        assertTrue(engine!!.state().getBoolean("api_key_saved"));assertEquals(replacement,store.load())
+        val cipherBefore=credentialFile(store).readBytes()
+        val keystore=java.security.KeyStore.getInstance("AndroidKeyStore").apply{load(null)}
+        keystore.deleteEntry(wrappingAlias(store))
+        assertFalse(engine!!.state().getBoolean("api_key_saved"))
+        try {engine!!.dispatch("summarize",JSONObject());fail("A missing wrapping key must not use or regenerate the credential")}
+        catch(_:ApiKeyStore.SavedKeyUnavailable){}
+        assertArrayEquals(cipherBefore,credentialFile(store).readBytes());assertFalse(keystore.containsAlias(wrappingAlias(store)))
+        engine!!.dispatch("save_api_key",JSONObject().put("api_key",replacement))
+        assertEquals(replacement,store.load());assertTrue(engine!!.state().getBoolean("api_key_saved"))
+        credentialFile(store).writeBytes(byteArrayOf(1))
+        assertFalse(engine!!.state().getBoolean("api_key_saved"))
+        assertFalse(engine!!.dispatch("clear_api_key",JSONObject()).getBoolean("api_key_saved"))
+        assertFalse(credentialFile(store).exists());assertFalse(keystore.containsAlias(wrappingAlias(store)))
+        assertEquals(0,asrCalls.get());assertEquals(0,summaryCalls.get())
+    }
 
     @Test fun bridgeStateActionMatchesDirectControllerState() {
         assertEquals(engine!!.state().toString(),engine!!.dispatch("state",JSONObject()).toString())

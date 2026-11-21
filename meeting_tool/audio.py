@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -11,6 +12,9 @@ import time
 import wave
 
 from .runtime_paths import is_frozen, resource_path
+from .exports import atomic_json
+
+AUDIO_PREPROCESS_VERSION = "voice-clean-v1"
 
 
 class CancelledError(RuntimeError):
@@ -115,6 +119,147 @@ def normalize_audio(source: Path, target: Path, cancel_event: threading.Event | 
         _check_cancel(cancel_event)
         os.replace(temporary, target)
         return target
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _enhance_signature(path: Path) -> dict:
+    """Validate the PCM payload and fingerprint it without loading a long recording."""
+    with wave.open(str(path), "rb") as stream:
+        layout = [stream.getnchannels(), stream.getsampwidth(), stream.getframerate(), stream.getnframes()]
+        if layout[:3] != [1, 2, 16000] or layout[3] <= 0 or stream.getcomptype() != "NONE":
+            raise ValueError("人声增强需要有效的16kHz、16位单声道WAV。")
+        stream.setpos(layout[3] - 1)
+        if len(stream.readframes(1)) != 2:
+            raise ValueError("增强音频文件不完整，请重新处理。")
+    stat = path.stat()
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        digest.update(stream.read(65536))
+        if stat.st_size > 65536:
+            stream.seek(max(0, stat.st_size - 65536))
+            digest.update(stream.read(65536))
+    return {"path": str(path.resolve()), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns,
+            "edge_sha256": digest.hexdigest(), "layout": layout}
+
+
+def enhance_audio(source: Path, target: Path, cancel_event: threading.Event | None = None,
+                  progress=None) -> Path:
+    """Optional bounded-memory spectral cleaning; no new FFmpeg filters/models.
+
+    A sqrt-Hann overlap-add uses original sample coordinates throughout. Padding
+    exists only inside the transform, and is never written into the recording.
+    The enhanced result is used for ASR only, never for speaker embeddings.
+    """
+    source, target = Path(source).resolve(), Path(target).resolve()
+    if source == target:
+        raise ValueError("增强音频必须另存，不能覆盖原录音。")
+    _check_cancel(cancel_event)
+    original = _enhance_signature(source)
+    metadata_path = target.with_name(target.name + ".enhance.json")
+    if target.is_file() and metadata_path.is_file():
+        try:
+            cached = json.loads(metadata_path.read_text(encoding="utf-8"))
+            if (isinstance(cached, dict) and cached.get("version") == AUDIO_PREPROCESS_VERSION and cached.get("source") == original
+                    and cached.get("output") == _enhance_signature(target)
+                    and cached["output"]["layout"] == original["layout"]):
+                if progress:
+                    progress(original["layout"][3], original["layout"][3])
+                return target
+        except (OSError, ValueError, KeyError, wave.Error, EOFError):
+            pass
+    try:
+        import numpy as np
+    except ImportError:
+        raise RuntimeError("人声增强组件不可用，请安装完整版本，或关闭人声增强后重试。") from None
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(target.name + ".enhancing.wav")
+    frame_size, hop = 1024, 256
+    total = original["layout"][3]
+    window = np.sqrt(np.hanning(frame_size + 1)[:-1])
+    window_square = window * window
+    profile_count = min(2048, max(1, total // frame_size))
+    spectra = np.empty((profile_count, frame_size // 2 + 1), dtype=np.float32)
+    energies = np.empty(profile_count, dtype=np.float64)
+    try:
+        # A bounded sample of quieter frames estimates background without keeping
+        # hours of audio in memory or assuming the recording starts with silence.
+        with wave.open(str(source), "rb") as reader:
+            for index, start in enumerate(np.linspace(0, max(0, total - frame_size), profile_count, dtype=np.int64)):
+                _check_cancel(cancel_event)
+                reader.setpos(int(start))
+                raw = np.frombuffer(reader.readframes(frame_size), dtype="<i2").astype(np.float64) / 32768.0
+                frame = np.zeros(frame_size)
+                frame[:len(raw)] = raw
+                energies[index] = np.mean(frame * frame)
+                spectra[index] = np.abs(np.fft.rfft(frame * window)) ** 2
+        quiet = np.argsort(energies)[:max(1, profile_count // 5)]
+        profile = np.median(spectra[quiet], axis=0).astype(np.float64)
+        # Frequency median avoids treating a persistent narrow voice harmonic as
+        # background. Suppression is capped at 8dB even for a poor estimate.
+        profile = np.median(np.lib.stride_tricks.sliding_window_view(np.pad(profile, 4, mode="edge"), 9), axis=-1)
+        profile_power = float(profile.sum())
+        minimum_gain = 10 ** (-8 / 20)
+        frequencies = np.fft.rfftfreq(frame_size, 1 / 16000)
+        highpass = np.minimum(1.0, frequencies / 70.0)
+        previous_mask = np.ones_like(profile)
+        history = np.zeros(frame_size)
+        overlap = np.zeros(frame_size)
+        weights = np.zeros(frame_size)
+        gain = 1.0
+        written = 0
+        steps = (total + hop - 1) // hop + frame_size // hop - 1
+        with wave.open(str(source), "rb") as reader, wave.open(str(temporary), "wb") as writer:
+            writer.setnchannels(1)
+            writer.setsampwidth(2)
+            writer.setframerate(16000)
+            for step in range(steps):
+                if step % 64 == 0:
+                    _check_cancel(cancel_event)
+                raw = reader.readframes(hop)
+                samples = np.frombuffer(raw, dtype="<i2").astype(np.float64) / 32768.0
+                history[:-hop] = history[hop:]
+                history[-hop:] = 0
+                history[-hop:][:len(samples)] = samples
+                spectrum = np.fft.rfft(history * window)
+                power = np.abs(spectrum) ** 2
+                mask = np.sqrt(np.maximum(1.0 - 0.8 * profile / (power + 1e-20), minimum_gain ** 2))
+                previous_mask = 0.65 * previous_mask + 0.35 * mask
+                overlap += np.fft.irfft(spectrum * previous_mask * highpass, frame_size) * window
+                weights += window_square
+                start = (step + 1) * hop - frame_size
+                left, right = max(0, -start), min(hop, total - start)
+                if right > left:
+                    block = overlap[left:right] / np.maximum(weights[left:right], 1e-12)
+                    rms = float(np.sqrt(np.mean(block * block)))
+                    speech_like = float(power.sum()) > 3 * profile_power and rms > 0.002
+                    desired_gain = 1.35 if speech_like else 1.0
+                    safe_gain = 0.97 / max(float(np.max(np.abs(block))), 1e-12)
+                    gain = min(safe_gain, 0.90 * gain + 0.10 * desired_gain)
+                    pcm = np.rint(block * gain * 32767.0).astype("<i2")
+                    writer.writeframesraw(pcm.tobytes())
+                    written += len(pcm)
+                overlap[:-hop] = overlap[hop:]
+                overlap[-hop:] = 0
+                weights[:-hop] = weights[hop:]
+                weights[-hop:] = 0
+                if progress and step % 64 == 0:
+                    progress(min(written, total), total)
+        _check_cancel(cancel_event)
+        if written != total or _enhance_signature(temporary)["layout"] != original["layout"]:
+            raise RuntimeError("人声增强前后采样帧数不一致，已停止，避免时间轴偏移。")
+        if _enhance_signature(source) != original:
+            raise RuntimeError("原音频在增强期间发生变化，已停止，请重新开始。")
+        os.replace(temporary, target)
+        atomic_json(metadata_path, {"version": AUDIO_PREPROCESS_VERSION, "method": "numpy-stft-8db-peak-safe",
+                                   "source": original, "output": _enhance_signature(target)})
+        if progress:
+            progress(total, total)
+        return target
+    except CancelledError:
+        raise
+    except Exception as exc:
+        raise RuntimeError("本地人声增强失败，未发送新的转写请求。请关闭增强重试，或检查磁盘与音频组件。") from exc
     finally:
         temporary.unlink(missing_ok=True)
 
