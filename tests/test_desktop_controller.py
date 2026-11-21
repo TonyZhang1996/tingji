@@ -150,12 +150,41 @@ class ControllerTests(unittest.TestCase):
         self.assertTrue(all(row["state"] == "pending" for row in state["selected_job"]["segments"]))
         self.assertFalse(any(self.output.rglob("checkpoint.json")))
 
+    def test_voice_enhancement_applies_to_a_new_task_only(self):
+        original = self.create_selected_complete()
+        ledger = original / "checkpoint.json"
+        original_bytes = ledger.read_bytes()
+        with self.assertRaisesRegex(ValueError, "新建转写"):
+            self.controller.dispatch("set_voice_enhancement", {"enhance_voice": True})
+
+        self.controller.dialog_picker = lambda _kind: self.audio
+        imported = self.controller.dispatch("choose_audio")
+        self.assertIsNone(imported["selected_job"])
+        self.assertFalse(imported["source"]["enhance_voice"])
+        with self.assertRaisesRegex(ValueError, "开启或关闭"):
+            self.controller.dispatch("set_voice_enhancement", {"enhance_voice": "false"})
+        self.controller.dispatch("set_voice_enhancement", {"enhance_voice": True})
+        self.controller.dispatch("analyze")
+        done = wait_idle(self.controller)
+        enhanced = done["selected_job"]
+        self.assertTrue(enhanced["enhance_voice"])
+        self.assertEqual({job["enhance_voice"] for job in done["jobs"]}, {True, False})
+        self.assertEqual(ledger.read_bytes(), original_bytes)
+
+        restored = MeetingController(self.root, settings_path=self.settings, job_factory=FakeJob)
+        state = restored.dispatch("select_job", {"id": enhanced["id"]})
+        self.assertTrue(state["source"]["enhance_voice"])
+        self.assertNotIn("enhance_voice", json.loads(self.settings.read_text(encoding="utf-8")))
+
     def test_rename_and_segment_review_preserve_original_paid_ledger(self):
         directory = self.create_selected_complete()
         checkpoint = directory / "checkpoint.json"
         original = checkpoint.read_bytes()
         state = self.controller.dispatch("speaker_names", {"names": {"S1": "甲", "S2": "乙"}})
         first = state["selected_job"]["segments"][0]
+        with self.assertRaisesRegex(ValueError, "录音任务已切换"):
+            self.controller.dispatch("segment_review", {"job_id": "previous-task-id", "id": first["id"], "text": "过期草稿"})
+        self.assertFalse((directory / "review_annotations.json").exists())
         self.controller.dispatch("segment_review", {"id": first["id"], "text": "人工校正文字", "speaker": "S2", "reviewed": True})
         result = self.controller.state()["selected_job"]
         self.assertEqual(result["segments"][0]["text"], "人工校正文字")

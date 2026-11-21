@@ -9,7 +9,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.min
 
-/** Android's persistent single-job controller. Keys never enter any stored object. */
+/** Android's persistent controller. Credentials never enter settings, jobs, state, or logs. */
 class MeetingEngine(
     context:Context,
     private val mediaUrl:(File)->String,
@@ -23,6 +23,7 @@ class MeetingEngine(
     private val cacheRoot=context.cacheDir
     private val sharedExportsRoot=File(cacheRoot,"shared_exports")
     private val settingsFile=File(dataRoot,"settings.json")
+    private val apiKeys=ApiKeyStore(context)
     private val lock=Any()
     private val jobs=linkedMapOf<String,JSONObject>()
     private var selected:String?=null
@@ -93,7 +94,7 @@ class MeetingEngine(
         val job=selected?.let { jobs[it] }
         val source=job?.let { j -> JSONObject().put("path",sourceFile(j).absolutePath).put("name",j.optString("source_name",j.getString("title")))
             .put("duration_seconds",j.getDouble("duration_seconds")).put("audio_url",mediaOrNull(playbackFile(j))) }
-        JSONObject().put("version","2.3.0-android.3").put("source",source?:JSONObject.NULL).put("settings",cloneJson(settings))
+        JSONObject().put("version",com.tingji.app.BuildConfig.VERSION_NAME).put("api_key_saved",apiKeys.hasSavedKey()).put("source",source?:JSONObject.NULL).put("settings",cloneJson(settings))
             .put("jobs",jsonArray(histories)).put("selected_job",job?.let { payload(it) }?:JSONObject.NULL).put("task",cloneJson(task)).put("logs",jsonArray(logs.toList()))
     }
     fun taskState():JSONObject = synchronized(lock) {cloneJson(task)}
@@ -103,6 +104,12 @@ class MeetingEngine(
             "state"->Unit
             "cancel","cancel_summary"->cancel()
             "config"-> synchronized(lock) { ensureIdle();updateSettings(payload,true);changed() }
+            "save_api_key"-> synchronized(lock) {
+                ensureIdle()
+                require(payload.keys().asSequence().all {it=="api_key"} && payload.opt("api_key") is String) {"请填写自己的 DeepSeek API Key。"}
+                apiKeys.save(payload.getString("api_key"));changed()
+            }
+            "clear_api_key"-> synchronized(lock) {ensureIdle();require(payload.length()==0) {"清除 API Key 的请求格式不正确。"};apiKeys.clear();changed()}
             "select_job"-> synchronized(lock) { ensureIdle();val id=payload.getString("id");require(validId(id)&&jobs.containsKey(id)) { "任务不存在。" };selected=id;changed() }
             "new_task"-> synchronized(lock) {ensureIdle();selected=null;changed()}
             "delete_job"-> synchronized(lock) { ensureIdle();deleteJob(payload.getString("job_id"));changed() }
@@ -112,12 +119,12 @@ class MeetingEngine(
                     ensureIdle()
                     if(payload.has("retry_uncertain")) { require(payload.opt("retry_uncertain") is Boolean);settings.put("retry_uncertain",payload.getBoolean("retry_uncertain"));writeJson(settingsFile,settings) }
                 }
-                start("transcribe",payload.optString("api_key"))
+                start("transcribe",requestKey(payload))
             }
             "summarize"->{
                 require(payload.opt("allow_partial")==null || payload.opt("allow_partial") is Boolean)
                 require(payload.opt("retry_failed")==null || payload.opt("retry_failed") is Boolean)
-                start("summary",payload.optString("api_key"),payload.optBoolean("allow_partial",false),payload.optBoolean("retry_failed",false))
+                start("summary",requestKey(payload),payload.optBoolean("allow_partial",false),payload.optBoolean("retry_failed",false))
             }
             "speaker_names"-> synchronized(lock) {
                 ensureIdle();val job=current();val names=payload.getJSONObject("names");val allowed=job.getJSONArray("segments").objects().map { it.getString("speaker") }.toSet()
@@ -146,6 +153,14 @@ class MeetingEngine(
     fun cancel() = synchronized(lock) { cancelled.set(true);if(task.optBoolean("running"))task.put("cancel_requested",true).put("message","正在停止；已发出的请求返回后会保存结果。");changed() }
     fun close() { cancel();executor.shutdown() }
 
+    private fun requestKey(payload:JSONObject):String {
+        if(payload.has("api_key")) {
+            require(payload.opt("api_key") is String) {"API Key 格式不正确，请重新填写。"}
+            return ApiKeyStore.validate(payload.getString("api_key"))
+        }
+        return apiKeys.load() ?: throw IllegalArgumentException("请先在转写设置中保存自己的 DeepSeek API Key。")
+    }
+
     fun exportFile(format:String):File? = synchronized(lock) {
         require(format in setOf("txt","md","json","csv","srt")) { "导出格式不支持。" }
         val job=selected?.let { jobs[it] }?:return@synchronized null
@@ -160,7 +175,7 @@ class MeetingEngine(
 
     private fun start(kind:String,secret:String,allowPartial:Boolean=false,retryFailed:Boolean=false) = synchronized(lock) {
         ensureIdle();val job=current()
-        if(kind!="analyze")require(secret.isNotBlank() && secret.length<=512) { "请填写自己的 DeepSeek API Key。" }
+        if(kind!="analyze")ApiKeyStore.validate(secret)
         validateLedger(job)
         if(kind!="summary") {
             val source=sourceFile(job)

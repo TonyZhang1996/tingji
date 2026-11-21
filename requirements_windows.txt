@@ -3,7 +3,6 @@
 -r requirements_desktop.txt
 torch==2.6.0+cpu
 torchaudio==2.6.0+cpu
-numpy==1.26.4
 scipy==1.13.1
 scikit-learn==1.5.2
 onnxruntime==1.20.1

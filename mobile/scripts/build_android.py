@@ -111,6 +111,10 @@ def main():
         shutil.copyfile(source, target)
         receipt.append({"path": relative, "sha256": digest(source)})
     android = MOBILE / "android"
+    app_gradle = (android / "app/build.gradle.kts").read_text(encoding="utf-8")
+    version = re.search(r'^\s*versionName\s*=\s*"([A-Za-z0-9.-]+)"\s*$', app_gradle, re.MULTILINE)
+    if version is None:
+        raise SystemExit("Missing Android versionName in app/build.gradle.kts.")
     for source in sorted(android.rglob("*")):
         if source.is_file():
             relative = source.relative_to(android).as_posix()
@@ -142,7 +146,7 @@ def main():
     apk = stage / f"app/build/outputs/apk/{args.variant}/app-{args.variant}{'-unsigned' if args.variant == 'release' else ''}.apk"
     if not apk.is_file(): raise SystemExit("Gradle did not produce the expected APK.")
     out = work / "dist"; out.mkdir(exist_ok=True)
-    output = out / f"Tingji-2.3.0-android.3-{args.variant}{'-unsigned' if args.variant == 'release' else ''}.apk"
+    output = out / f"Tingji-{version[1]}-{args.variant}{'-unsigned' if args.variant == 'release' else ''}.apk"
     shutil.copyfile(apk, output)
     shutil.copyfile(stage / "build-inputs.json", out / (output.stem + "-build-inputs.json"))
     (out / (output.name + ".sha256")).write_text(digest(output) + "  " + output.name + "\n", encoding="ascii")

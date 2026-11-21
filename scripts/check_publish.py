@@ -75,6 +75,7 @@ ANDROID_FILES = {
     'mobile/android/app/src/main/java/com/tingji/app/TingjiApplication.kt',
     'mobile/android/app/src/main/java/com/tingji/app/TingjiTaskService.kt',
     'mobile/android/app/src/main/java/com/tingji/app/engine/AudioTools.kt',
+    'mobile/android/app/src/main/java/com/tingji/app/engine/ApiKeyStore.kt',
     'mobile/android/app/src/main/java/com/tingji/app/engine/DeepSeekClient.kt',
     'mobile/android/app/src/main/java/com/tingji/app/engine/EngineFiles.kt',
     'mobile/android/app/src/main/java/com/tingji/app/engine/MeetingEngine.kt',

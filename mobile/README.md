@@ -4,17 +4,17 @@
 
 ## 简体中文
 
-听记 Android 的当前预发布版本为 **2.3.0-android.3**。手机导入已有会议录音，在本机分析人物，再使用自己的 DeepSeek API Key 转写和总结。手机可独立处理任务，不依赖电脑保持开机，也没有听记中转服务器。
+听记 Android 的当前预发布版本为 **2.3.0-android.4**。手机导入已有会议录音，在本机分析人物，再使用自己的 DeepSeek API Key 转写和总结。手机可独立处理任务，不依赖电脑保持开机，也没有听记中转服务器。
 
-当前主要适配目标为 **vivo X300 等 ARM64 安卓手机**。工程最低安卓版本为 Android 8.0；这不代表所有机型均已验收。尚未完成 vivo X300 真机测试，处理速度、发热、耗电和真实会议人物区分效果需在目标手机上验证。预发布版不应作为重要会议内容的唯一备份。
+安装包包含 **arm64-v8a 和 x86_64**，要求 Android 8.0 及以上；主要适配目标为 **vivo X300 等 ARM64 安卓手机**。这不代表所有机型均已验收。尚未完成 vivo X300 真机测试，处理速度、发热、耗电和真实会议人物区分效果需在目标手机上验证。预发布版不应作为重要会议内容的唯一备份。
 
 ### 安装和开始使用
 
-1. 用手机[下载 Android APK](https://github.com/TonyZhang1996/tingji/releases/download/v2.3.0-android.3/Tingji-2.3.0-android.3-arm64-v8a.apk)（约 60 MB），或查看 [Android 发布说明](https://github.com/TonyZhang1996/tingji/releases/tag/v2.3.0-android.3)。Windows 安装包不能安装到安卓。
+1. 用手机[下载 Tingji-2.3.0-android.4.apk](https://github.com/TonyZhang1996/tingji/releases/download/v2.3.0-android.4/Tingji-2.3.0-android.4.apk)（约 96 MB，arm64-v8a / x86_64，Android 8.0 及以上），或查看 [Android 发布说明](https://github.com/TonyZhang1996/tingji/releases/tag/v2.3.0-android.4)。Windows 安装包不能安装到安卓。
 2. 使用安卓系统安装程序安装 APK，打开听记。已有版本请直接覆盖安装，保留应用内任务；不要先卸载。人物模型随安装包提供，不需要安装 Python、FFmpeg 或配置模型环境。
 3. 点击“选择本地录音”，通过系统文件选择器导入 MP3、M4A、WAV 等系统可解码的音频。也可从支持系统分享的应用将音频分享给听记。
 4. 知道实际发言人数时填写人数；不确定时保留自动判断。先“分析人物”，在“人物”页试听样例并填写姓名。
-5. 首次打开会引导填写自己的 DeepSeek API Key，也可选择“稍后填写”。Key 仅留在当前应用会话内存中；以后重新打开应用时，可在设置中重新填写，再点击“开始转写”。成功片段会逐段保存，转写和总结费用由自己的 DeepSeek 账户承担。
+5. 首次打开时填写自己的 DeepSeek API Key，也可选择“稍后填写”。2.3.0-android.4 起，保存后重开应用即可继续使用，可在转写设置里更换或清除。2.3.0-android.3 只在当前会话中保存输入。成功片段会逐段保存，转写和总结费用由自己的 DeepSeek 账户承担。
 6. “文字”和“总结”页均可直接上滑，让任务信息和操作区滚出屏幕；顶部有醒目的“全屏阅读”入口，点击后使用更大的正文区域，退出按钮或系统返回键可恢复布局和位置。点击“显示工具栏”可回到顶部操作区。
 7. 通过“导出文字”或总结页的“导出分享”保存结果，也可以交给系统分享面板中的其它应用。
 
@@ -35,7 +35,7 @@
 
 **本地人物分析不调用云端 API。** 开始转写会将音频片段发送至 DeepSeek；生成总结会发送转写文字、人物标签和时间位置。需要联网的部分是 DeepSeek 转写与总结。
 
-API Key 仅在当前应用会话和任务内存中使用，不保存到配置、任务记录、日志、安装包或 GitHub。应用没有账户登录、云同步或自动上传会议结果的功能。
+本版本的 API Key 由 Android Keystore 按设备加密，每台设备需单独保存。密文保存在本机应用的私有目录，排除在系统备份之外。配置、任务记录、日志、安装包和 GitHub 不包含用户密钥。应用没有账户登录、云同步或自动上传会议结果的功能。
 
 首次 Key 引导只保存一个“已填写或跳过引导”的布尔标记，避免每次打开都弹窗；它不包含 Key。
 
@@ -79,15 +79,15 @@ py -3.11 mobile/scripts/audit_apk.py 'D:\tingji-release\Tingji.apk' --sdk 'D:\To
 
 ## English
 
-The current Android prerelease is **2.3.0-android.3**. Import a meeting recording, analyze speakers locally, and use **your own DeepSeek API key** for transcription and summaries. The phone processes tasks independently; a running desktop computer or a Tingji relay server is not required.
+The current Android prerelease is **2.3.0-android.4**. Import a meeting recording, analyze speakers locally, and use **your own DeepSeek API key** for transcription and summaries. The phone processes tasks independently; a running desktop computer or a Tingji relay server is not required.
 
-The primary target is **ARM64 Android phones such as the vivo X300**. The project has a minimum API level corresponding to Android 8.0, which does not establish compatibility with every device. It has not yet been validated on a physical vivo X300. Processing time, thermal behavior, battery use and real-meeting diarization accuracy need device testing. The interface is in Chinese.
+The APK includes **arm64-v8a and x86_64**, requires Android 8.0 or later, and primarily targets **ARM64 Android phones such as the vivo X300**. This does not establish compatibility with every device. It has not yet been validated on a physical vivo X300. Processing time, thermal behavior, battery use and real-meeting diarization accuracy need device testing. The interface is in Chinese.
 
 ### Install and use
 
-Download the APK from the Android prerelease on [GitHub Releases](https://github.com/TonyZhang1996/tingji/releases), install it with the Android system installer and open Tingji. Models are bundled; no Python, FFmpeg or manual model environment is required.
+Download [Tingji-2.3.0-android.4.apk](https://github.com/TonyZhang1996/tingji/releases/download/v2.3.0-android.4/Tingji-2.3.0-android.4.apk) (about 96 MB; arm64-v8a and x86_64; Android 8.0 or later), install it with the Android system installer and open Tingji. Verified results are listed in the [release notes](https://github.com/TonyZhang1996/tingji/releases/tag/v2.3.0-android.4). Models are bundled; no Python, FFmpeg or manual model environment is required.
 
-Install an update over the existing app to retain tasks; do not uninstall first. Choose an existing audio file using the system picker, or share supported audio from another app. MP3, M4A and WAV are initial supported examples; decoding depends on Android's available media codecs. Set the speaker count if known, analyze speakers, listen to the samples and enter names. A first-use dialog accepts your API key or lets you skip; the key remains in session memory, so enter it again in Settings in a later session when needed. Transcribe, review the text, then generate the overall summary, per-speaker summaries and action items. Use the export/share controls to save results with other apps.
+Install an update over the existing app to retain tasks. Choose an existing audio file using the system picker, or share supported audio from another app. MP3, M4A and WAV are initial supported examples. Decoding depends on Android's available media codecs. Set the speaker count if known, analyze speakers, listen to the samples and enter names. Enter your API key in the first-use dialog or in Settings. Starting with 2.3.0-android.4, a saved key is available when the app reopens. Use Settings to replace or clear it. Version 2.3.0-android.3 retains the key for the current session only. Transcribe, review the text, then generate the overall summary, per-speaker summaries and action items. Use the export/share controls to save results with other apps.
 
 Bottom navigation switches between tasks, transcript, speakers and summary. Android Back closes the current dialog or panel first.
 
@@ -105,7 +105,7 @@ ASR requests are submitted one segment at a time. Successful segments are reused
 
 Speaker analysis runs locally. Transcription sends audio segments to DeepSeek; summarization sends transcript text, speaker labels and time references. These operations need network access and use the user's DeepSeek balance.
 
-API keys stay in application/session task memory and are not written to settings, logs, results, the APK or GitHub. Tingji does not add accounts, cloud synchronization or automatic meeting-result uploads.
+This version uses Android Keystore for device-bound API-key encryption. Save your key separately on each device. The encrypted file stays in the app's private storage and is excluded from system backups. Settings, logs, results, the APK and GitHub contain no user credentials. Tingji does not add accounts, cloud synchronization or automatic meeting-result uploads.
 
 Imported copies, audio caches, transcripts, corrections and summaries live in private app storage. **Uninstalling Android removes this data, unlike the Windows version.** Export important results before uninstalling or changing phones. Files shared to another app follow that app's retention behavior.
 

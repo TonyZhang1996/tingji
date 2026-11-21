@@ -15,9 +15,10 @@ import threading
 import time
 from typing import Callable
 
-from .audio import probe_audio
+from .audio import AUDIO_PREPROCESS_VERSION, probe_audio
 from .engine import DIARIZATION_VERSION, WORKFLOW_VERSION, JobLock, MeetingJob, RunConfig, job_directory
 from .exports import atomic_json, export_transcript
+from .credential_store import CredentialStore, default_credential_path, validate_api_key
 from .summarization import (ATTRIBUTION_POLICY, DEFAULT_MODEL, PROMPT_VERSION, SummaryService,
                             render_markdown, speaker_catalog, validate_content)
 
@@ -64,11 +65,12 @@ def segment_id(turn: dict) -> str:
 class MeetingController:
     def __init__(self, app_dir: Path, *, settings_path: Path | None = None, job_factory=MeetingJob,
                  dialog_picker: Callable | None = None, opener: Callable | None = None,
-                 summary_factory=SummaryService):
+                 summary_factory=SummaryService, credential_store=None):
         self.app_dir = Path(app_dir).resolve()
         self.settings_path = Path(settings_path or self.app_dir / "settings.json")
         self.job_factory = job_factory
         self.summary_factory = summary_factory
+        self._credential_store = credential_store if credential_store is not None else CredentialStore(default_credential_path(self.app_dir))
         self.dialog_picker = dialog_picker
         self.opener = opener or self._system_open
         self._lock = threading.RLock()
@@ -160,7 +162,8 @@ class MeetingController:
     def _old_version(self, analysis: dict):
         fingerprint = analysis.get("fingerprint", {})
         return (fingerprint.get("workflow_version") != WORKFLOW_VERSION
-                or analysis.get("diarization_version", fingerprint.get("diarization_version")) != DIARIZATION_VERSION)
+                or analysis.get("diarization_version", fingerprint.get("diarization_version")) != DIARIZATION_VERSION
+                or fingerprint.get("audio_preprocess") not in (None, AUDIO_PREPROCESS_VERSION))
 
     def _metadata(self, path: Path):
         analysis = read_json(path / "analysis.json", {})
@@ -203,6 +206,7 @@ class MeetingController:
         summary = {"id": key, "title": Path(source).stem if source else path.name,
                 "source_path": source, "duration_seconds": analysis.get("duration_seconds", 0),
                 "speaker_count": analysis.get("num_speakers_found", 0), "updated_at": updated,
+                "enhance_voice": bool(fingerprint.get("audio_preprocess")),
                 "status": status, "old_version": self._old_version(analysis) if analysis else False,
                 "done_count": count, "segment_count": len(segments) or len(analysis.get("turns", []))}
         self._summary_cache[key] = (signature, dict(summary))
@@ -220,7 +224,8 @@ class MeetingController:
         source_path = fingerprint.get("path")
         if source_path:
             self._source = {**analysis.get("source_info", {}), "path": source_path,
-                            "name": Path(source_path).name, "duration_seconds": analysis.get("duration_seconds", 0)}
+                            "name": Path(source_path).name, "duration_seconds": analysis.get("duration_seconds", 0),
+                            "enhance_voice": bool(fingerprint.get("audio_preprocess"))}
         self.settings["num_speakers"] = int(analysis.get("num_speakers_requested", fingerprint.get("num_speakers", self.settings["num_speakers"])))
         self.settings["output_root"] = str(path.parent)
 
@@ -314,7 +319,7 @@ class MeetingController:
             self._log("已删除一条历史任务及其生成文件；原始录音已保留。")
         return self.state()
 
-    def select_audio(self, path: Path | str):
+    def select_audio(self, path: Path | str, *, new_task: bool = False):
         source = Path(path).expanduser().resolve()
         with self._lock:
             self._ensure_idle()
@@ -323,10 +328,12 @@ class MeetingController:
         info = probe_audio(source)
         with self._lock:
             self._ensure_idle()
-            self._source = {**info, "path": str(source), "name": source.name}
-            config = self._config("")
-            candidate = job_directory(config)
-            self._selected = self._register_job(candidate) if (candidate / "analysis.json").is_file() else None
+            self._source = {**info, "path": str(source), "name": source.name, "enhance_voice": False}
+            self._selected = None
+            if not new_task:
+                candidate = job_directory(self._config(""))
+                if (candidate / "analysis.json").is_file():
+                    self._selected = self._register_job(candidate)
             self._task.update(stage="idle", current=0, total=0, message="录音已选择。可以先免费分析人物。")
             self._log("已选择录音：" + source.name)
         return self.state()
@@ -481,9 +488,18 @@ class MeetingController:
         os.replace(temporary, target)
         return target
 
-    def summarize(self, api_key: str, allow_partial: bool = False, *, retry_failed: bool = False):
-        if not isinstance(api_key, str) or not api_key.strip() or len(api_key) > 512:
+    def _resolve_api_key(self, supplied: object = "") -> str:
+        if not isinstance(supplied, str):
             raise ValueError("请填写有效的 DeepSeek API Key。")
+        if supplied.strip():
+            return validate_api_key(supplied)
+        saved = self._credential_store.load()
+        if not saved:
+            raise ValueError("请先在设置中保存 DeepSeek API Key，或填写本次使用的 Key。")
+        return saved
+
+    def summarize(self, api_key: str = "", allow_partial: bool = False, *, retry_failed: bool = False):
+        api_key = self._resolve_api_key(api_key)
         if not isinstance(allow_partial, bool):
             raise ValueError("仅总结已转写部分必须为开或关。")
         if not isinstance(retry_failed, bool):
@@ -585,7 +601,8 @@ class MeetingController:
             if source:
                 source["audio_url"] = self.register_media(Path(source["path"]))
             return {"version": VERSION, "source": source, "settings": dict(self.settings), "jobs": summaries,
-                    "selected_job": self._selected_payload(), "task": dict(self._task), "logs": list(self._logs)}
+                    "selected_job": self._selected_payload(), "task": dict(self._task), "logs": list(self._logs),
+                    "api_key_saved": self._credential_store.is_saved()}
 
     def _config(self, api_key: str):
         if not self._source:
@@ -593,14 +610,14 @@ class MeetingController:
         return RunConfig(audio_path=Path(self._source["path"]), output_root=Path(self.settings["output_root"]),
                          api_key=api_key, num_speakers=self.settings["num_speakers"],
                          max_workers=self.settings["max_workers"], hourly_price=self.settings["hourly_price"],
-                         retry_uncertain=self.settings["retry_uncertain"])
+                         retry_uncertain=self.settings["retry_uncertain"],
+                         enhance_voice=self._source.get("enhance_voice", False))
 
     def _start(self, analyze: bool, api_key: str = ""):
         with self._lock:
             self._ensure_idle()
-            if not analyze and not api_key.strip():
-                raise ValueError("请填写 DeepSeek API Key。仅分析人物可以不填。")
-            config = self._config(api_key.strip())
+            resolved_key = "" if analyze else self._resolve_api_key(api_key)
+            config = self._config(resolved_key)
             target = job_directory(config)
             config.speaker_names = self._names(target)
             self._selected = self._register_job(target)
@@ -660,7 +677,7 @@ class MeetingController:
             if not selected:
                 return
             if kind == "audio":
-                self.select_audio(selected)
+                self.select_audio(selected, new_task=True)
             else:
                 with self._lock:
                     self._ensure_idle()
@@ -672,7 +689,15 @@ class MeetingController:
         payload = payload or {}
         if not isinstance(payload, dict):
             raise ValueError("请求内容必须为对象。")
-        if action in ("choose_audio", "choose_output"):
+        if action == "save_api_key":
+            if set(payload) != {"api_key"}:
+                raise ValueError("保存请求必须只包含 API Key。")
+            self._credential_store.save(payload["api_key"])
+        elif action == "clear_api_key":
+            if payload:
+                raise ValueError("清除 API Key 不需要额外参数。")
+            self._credential_store.clear()
+        elif action in ("choose_audio", "choose_output"):
             self._pick("audio" if action == "choose_audio" else "output")
         elif action == "summarize":
             if set(payload) - {"api_key", "allow_partial", "retry_failed"}:
@@ -697,6 +722,14 @@ class MeetingController:
                 self.settings = self._validate_settings(payload)
                 atomic_json(self.settings_path, self.settings)
                 self._scan_jobs()
+        elif action == "set_voice_enhancement":
+            if set(payload) != {"enhance_voice"} or not isinstance(payload["enhance_voice"], bool):
+                raise ValueError("请选择开启或关闭人声增强。")
+            with self._lock:
+                self._ensure_idle()
+                if not self._source or self._selected:
+                    raise ValueError("请在新建转写时选择录音，再设置人声增强。")
+                self._source["enhance_voice"] = payload["enhance_voice"]
         elif action == "select_job":
             with self._lock:
                 self._ensure_idle()
@@ -710,12 +743,14 @@ class MeetingController:
                 with self._lock:
                     self._ensure_idle()
                     self.settings = self._validate_settings({"retry_uncertain": payload["retry_uncertain"]})
-            self._start(action == "analyze", str(payload.get("api_key", "")))
+            self._start(action == "analyze", payload.get("api_key", ""))
         elif action in ("speaker_names", "segment_review"):
             with self._lock:
                 self._ensure_idle()
                 if not self._selected:
                     raise ValueError("请先选择一个已分析的任务。")
+                if action == "segment_review" and "job_id" in payload and payload["job_id"] != self._selected:
+                    raise ValueError("当前录音任务已切换，请回到原任务保存修改。")
                 path = self._jobs[self._selected]
                 analysis, checkpoint, transcript = self._metadata(path)
                 rows = self._rows(analysis, checkpoint, transcript)

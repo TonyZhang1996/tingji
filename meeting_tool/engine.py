@@ -12,7 +12,7 @@ import re
 import threading
 import time
 
-from .audio import CancelledError, normalize_audio, probe_audio, slice_wav, wav_duration
+from .audio import AUDIO_PREPROCESS_VERSION, CancelledError, enhance_audio, normalize_audio, probe_audio, slice_wav, wav_duration
 from .deepseek_api import ApiError, DeepSeekASR
 from .diarization_worker import VERSION as DIARIZATION_VERSION
 from .exports import atomic_json, export_transcript, refresh_exports
@@ -30,6 +30,7 @@ class RunConfig:
     max_workers: int = 2
     hourly_price: float = 0.39
     retry_uncertain: bool = False
+    enhance_voice: bool = False
 
 
 def source_fingerprint(config: RunConfig) -> dict:
@@ -43,9 +44,14 @@ def source_fingerprint(config: RunConfig) -> dict:
         if stat.st_size > 1024 * 1024:
             stream.seek(max(0, stat.st_size - 1024 * 1024))
             digest.update(stream.read(1024 * 1024))
-    return {"path": str(path), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns,
+    fingerprint = {"path": str(path), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns,
             "sample_sha256": digest.hexdigest(), "num_speakers": int(config.num_speakers),
             "workflow_version": WORKFLOW_VERSION, "diarization_version": DIARIZATION_VERSION}
+    if not isinstance(config.enhance_voice, bool):
+        raise ValueError("人声增强选项必须为开或关。")
+    if config.enhance_voice:
+        fingerprint["audio_preprocess"] = AUDIO_PREPROCESS_VERSION
+    return fingerprint
 
 
 def job_directory(config: RunConfig) -> Path:
@@ -148,6 +154,7 @@ class MeetingJob:
         self._network_stop = threading.Event()
         self._records: list[dict] = []
         self._metadata = {}
+        self._asr_audio_path = self.job_dir / "cache" / ("recording_16k_enhanced.wav" if config.enhance_voice else "recording_16k.wav")
 
     def _notify(self, stage: str, current: int = 0, total: int = 0, message: str = ""):
         self.progress({"stage": stage, "current": current, "total": total, "message": message})
@@ -172,6 +179,8 @@ class MeetingJob:
             try:
                 old = json.loads((directory / "analysis.json").read_text(encoding="utf-8"))
                 fingerprint = old.get("fingerprint", {})
+                if bool(fingerprint.get("audio_preprocess")) != bool(self._fingerprint.get("audio_preprocess")):
+                    continue
                 if (isinstance(fingerprint, dict)
                         and all(fingerprint.get(key) == self._fingerprint[key] for key in identity_keys)
                         and fingerprint != self._fingerprint):
@@ -329,6 +338,8 @@ class MeetingJob:
                           "price_notice": "仅为界面估算；折扣和实际扣费以 DeepSeek 账单为准。",
                           "workflow_version": WORKFLOW_VERSION, "diarization_version": DIARIZATION_VERSION,
                           "diarization_warnings": analysis.get("warnings", [])}
+        if self.config.enhance_voice:
+            self._metadata.update(audio_preprocess=AUDIO_PREPROCESS_VERSION, enhance_voice=True)
         with self._record_lock:
             self._checkpoint()
 
@@ -340,7 +351,7 @@ class MeetingJob:
         piece = self.job_dir / "cache" / "asr_parts" / (record["id"] + ".wav")
         requested = False
         try:
-            slice_wav(self.job_dir / "cache" / "recording_16k.wav", piece, record["start"], record["end"], combined)
+            slice_wav(self._asr_audio_path, piece, record["start"], record["end"], combined)
             if combined.is_set():
                 return
             with self._record_lock:
@@ -399,6 +410,12 @@ class MeetingJob:
                 self.log(f"有 {unknown} 段上次请求结果不明。已保留并跳过；勾选允许重试后才会重新提交。")
             todo = [index for index, row in enumerate(self._records)
                     if row["state"] not in ("done", "ambiguous") or (row["state"] == "ambiguous" and self.config.retry_uncertain)]
+            if todo and self.config.enhance_voice:
+                self._notify("enhance", message="正在本地增强人声，原始录音和人物时间轴保持不变")
+                enhance_audio(self.job_dir / "cache" / "recording_16k.wav", self._asr_audio_path,
+                              self.cancel_event,
+                              progress=lambda current, total: self._notify("enhance", current, total, "正在本地增强人声"))
+                self._check_cancel()
             resumed = sum(row["state"] == "done" for row in self._records)
             self.log(f"已有 {resumed} 段成功结果，本次不会重复提交；待处理 {len(todo)} 段。")
             self._notify("transcribe", resumed, len(self._records), "正在分段转写；每段成功后立即保存")
